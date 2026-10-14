@@ -35,6 +35,7 @@ namespace TradeAssistant
         [Serialized] public bool DurabilityPricingEnabled { get; set; } = false;
         [Serialized] public float DurabilityMinPricePercent { get; set; } = 50f;
         [Serialized] public float QualityPremiumPercent { get; set; } = 0f;
+        [Serialized] public ThreadSafeDictionary<string, float> CategoryDiscounts { get; set; } = new();
 
         public UserConfigUI ToUI()
         {

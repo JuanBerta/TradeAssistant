@@ -35,6 +35,7 @@ namespace TradeAssistant
             sb.AppendLine(Localizer.DoStr("- OPTIONAL: create a category called \"SOON TO EXPIRE\" in your store and add items to it, and set a freshness qualifier (min/max) on those offers so only expiring food qualifies. Set the discount percentage with /ta config, and /ta update will apply that discount to those items on top of the normal price."));
             sb.Append(Localizer.DoStr("- Once you're done with that the last step is to run ")).Append(Text.Name("/ta update")).AppendLine(Localizer.DoStr(", this will update the prices of all your sell orders based on your configured profit percentage and labor cost."));
             sb.AppendLine(Localizer.DoStr("- Optional: run /ta explainbuy <itemName> to see exactly how the buy price of an item is calculated, including the cost price breakdown."));
+            sb.AppendLine(Localizer.DoStr("- Optional: use /ta discount <categoryName> <percent> to apply a discount to a whole sell category (e.g. /ta discount Tools 10). Use /ta discount list to review and /ta discount remove <categoryName> to clear one."));
 
             user.TempServerMessage(sb);
         }
@@ -194,14 +195,15 @@ namespace TradeAssistant
                     // SellPrice * (1 - TaxRate) = CostPrice * (1 + Profit)
                     // SellPrice = CostPrice * (1 + Profit) / (1 - TaxRate)
                     var normalPrice = price * (1 + calc.Config.Profit / 100f) / (1 - calc.Store.GetTax());
-                    var newPrice = Mathf.RoundToAcceptedDigits(normalPrice * (1 - discountPercent / 100f));
+                    var discount = Math.Max(discountPercent, calc.DiscountPercentFor(itemID));
+                    var newPrice = Mathf.RoundToAcceptedDigits(normalPrice * (1 - discount / 100f));
                     if (calc.Config.DurabilityPricingEnabled)
                     {
                         foreach (var offer in calc.Store.StoreData.SellOffers.Where(o => o.MatchesTypeID(itemID)).ToList())
-                            (discountPercent > 0 ? discountedUpdates : updates).AddRange(calc.SetSellOfferPrice(offer, newPrice));
+                            (discount > 0 ? discountedUpdates : updates).AddRange(calc.SetSellOfferPrice(offer, newPrice));
                     }
                     else
-                        (discountPercent > 0 ? discountedUpdates : updates).AddRange(calc.SetSellPrice(itemID, newPrice));
+                        (discount > 0 ? discountedUpdates : updates).AddRange(calc.SetSellPrice(itemID, newPrice));
                     if (itemWarnings != null)
                         warnings.AddRange(itemWarnings);
                 }
@@ -319,8 +321,11 @@ namespace TradeAssistant
 
         }
 
+
+
         [ChatSubCommand(nameof(TradeAssistant), "Automatically creates sell categories based on the item categories of your sell offers. Usage: /ta autocategories", ChatAuthorizationLevel.User)]
         public static async Task AutoCategories(User user)
+
 
         {
             var calc = await TradeAssistantCalculator.TryInitialize(user);
@@ -370,6 +375,70 @@ namespace TradeAssistant
                 user.TempServerMessage(Localizer.Do($"Auto-created {created} sell categor{(created == 1 ? "y" : "ies")} ({skipped} already existed).{Environment.NewLine}{sb.ToStringLoc()}"));
         }
 
+        [ChatSubCommand(nameof(TradeAssistant), "Sets a discount percentage for a sell category. Usage: /ta discount <categoryName> <percent>", ChatAuthorizationLevel.User)]
+        public static async Task Discount(User user, string categoryName, string percent)
+        {
+            var calc = await TradeAssistantCalculator.TryInitialize(user);
+            if (calc == null) return;
+
+            if (!float.TryParse(percent, System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out var value) || value < 0f || value > 100f)
+            {
+                user.TempServerMessage(Localizer.DoStr("Please provide a discount percentage between 0 and 100."));
+                return;
+            }
+
+            var name = calc.FindSellCategoryName(categoryName);
+            if (name == null)
+            {
+                user.TempServerMessage(Localizer.DoStr("Could not find a sell category with that name."));
+                return;
+            }
+
+            calc.Config.CategoryDiscounts[name] = value;
+            StorageManager.Obj.MarkDirty(TradeAssistantData.Obj);
+            user.TempServerMessage(Localizer.Do($"Discount of {Text.StyledNum(value)}% set for the '{name}' category. Run /ta update to apply it."));
+        }
+
+        [ChatSubCommand(nameof(TradeAssistant), "Removes the discount percentage for a sell category. Usage: /ta discount remove <categoryName>", ChatAuthorizationLevel.User)]
+        public static async Task DiscountRemove(User user, string categoryName)
+        {
+            var calc = await TradeAssistantCalculator.TryInitialize(user);
+            if (calc == null) return;
+
+            var name = calc.FindSellCategoryName(categoryName);
+            if (name == null || !calc.Config.CategoryDiscounts.Remove(name))
+            {
+                user.TempServerMessage(Localizer.DoStr("There is no discount configured for a category with that name."));
+                return;
+            }
+
+            StorageManager.Obj.MarkDirty(TradeAssistantData.Obj);
+            user.TempServerMessage(Localizer.Do($"Removed the discount for the '{name}' category."));
+        }
+
+
+
+        [ChatSubCommand(nameof(TradeAssistant), "Lists all configured per-category discounts", ChatAuthorizationLevel.User)]
+        public static async Task DiscountList(User user)
+        {
+            var calc = await TradeAssistantCalculator.TryInitialize(user);
+            if (calc == null) return;
+
+            if (calc.Config.CategoryDiscounts.Count == 0)
+            {
+                user.TempServerMessage(Localizer.DoStr("There are no per-category discounts configured."));
+                return;
+            }
+
+            var sb = new StringBuilder();
+            sb.AppendLineLoc($"Configured category discounts:");
+            foreach (var pair in calc.Config.CategoryDiscounts.OrderBy(p => p.Key))
+                sb.AppendLineLoc($"- {pair.Key}: {Text.StyledNum(pair.Value)}%");
+            user.TempServerMessage(sb.ToStringLoc());
+        }
+
+
+
 
         [ChatSubCommand(nameof(TradeAssistant), "Explains how the buy price is calculated for a product", ChatAuthorizationLevel.User)]
         public static async Task ExplainBuy(User user, string itemName, User? whoToSendTo = null)
@@ -400,7 +469,6 @@ namespace TradeAssistant
 
         [ChatSubCommand(nameof(TradeAssistant), "Enables or disables durability/quality-based pricing. Usage: /ta durpricing <on|off>", ChatAuthorizationLevel.User)]
         public static async Task DurabilityPricing(User user, string state)
-
         {
             var calc = await TradeAssistantCalculator.TryInitialize(user);
             if (calc == null) return;
