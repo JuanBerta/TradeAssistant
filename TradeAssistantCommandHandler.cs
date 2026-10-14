@@ -167,12 +167,13 @@ namespace TradeAssistant
 
             // Items placed in a store category named "SOON TO EXPIRE" are updated separately:
             // they get the player-configured discount percentage applied on top of the normal price.
-            // Only offers whose freshness qualifiers (min/max durability, 0..100) mark them as
-            // expiring get the discount; fresh or unrestricted offers in that category are priced normally.
+            // Only offers whose freshness qualifiers (min/max durability, 0..100) fall inside the
+            // configured [min, max] freshness window get the discount; fresh or unrestricted offers
+            // in that category are priced normally.
             var soonToExpireItemIds = calc.Store.StoreData.SellCategories
                 .Where(c => !c.IsBuy && string.Equals(c.Name?.Trim(), "SOON TO EXPIRE", StringComparison.OrdinalIgnoreCase))
                 .SelectMany(c => c.Offers)
-                .Where(o => o.HasQualifiers && o.MaxDurability <= calc.Config.SoonToExpireMaxFreshness && o.MinDurability <= calc.Config.SoonToExpireMaxFreshness)
+                .Where(o => o.HasQualifiers && o.MinDurability >= calc.Config.SoonToExpireMinFreshness && o.MaxDurability <= calc.Config.SoonToExpireMaxFreshness)
                 .SelectMany(o => o.OfferedItemTypeIDs())
                 .Where(storeSellItemIds.Contains)
                 .ToHashSet();
