@@ -32,6 +32,7 @@ namespace TradeAssistant
             sb.Append(Localizer.DoStr("- Next up run the ")).Append(Text.Name("/ta setupbuy")).AppendLine(" command. This will go through the list of sell orders and add all the possible input items you need to craft these in the buy orders.");
             sb.AppendLine(Localizer.DoStr("- Now go through your buy orders and set the buy prices as well as the buy limits for each item.")); // TODO: Mention how you can remove Tagged items
             sb.Append(Localizer.DoStr("- Run ")).Append(Text.Name("/ta config")).AppendLine(Localizer.DoStr(" to set your desired profit percentage and cost per calory."));
+            sb.AppendLine(Localizer.DoStr("- OPTIONAL: create a category called \"SOON TO EXPIRE\" in your store and add items to it. Set the discount percentage with /ta config, and /ta update will apply that discount to those items on top of the normal price."));
             sb.Append(Localizer.DoStr("- Once you're done with that the last step is to run ")).Append(Text.Name("/ta update")).AppendLine(Localizer.DoStr(", this will update the prices of all your sell orders based on your configured profit percentage and labor cost."));
 
             user.TempServerMessage(sb);
@@ -162,14 +163,24 @@ namespace TradeAssistant
                 .Where(storeSellItemIds.Contains)
                 .ToList();
 
+            // Items placed in a store category named "SOON TO EXPIRE" are updated separately:
+            // they get the player-configured discount percentage applied on top of the normal price.
+            var soonToExpireItemIds = calc.Store.StoreData.SellCategories
+                .Where(c => !c.IsBuy && string.Equals(c.Name?.Trim(), "SOON TO EXPIRE", StringComparison.OrdinalIgnoreCase))
+                .SelectMany(c => c.Offers)
+                .SelectMany(o => o.OfferedItemTypeIDs())
+                .Where(storeSellItemIds.Contains)
+                .ToHashSet();
+            var normalItemIds = storeSellItemIds.Where(id => !soonToExpireItemIds.Contains(id)).ToList();
+
             var byProducts = calc.Config.ByProducts.ToHashSet();
             var craftableItems = calc.CraftableItems.SelectMany(x => x.Value).Select(x => x.TypeID).Distinct().ToHashSet();
             var output = new StringBuilder();
             var updates = new List<LocString>();
+            var discountedUpdates = new List<LocString>();
             var warnings = new List<LocString>();
 
-
-            foreach (var itemID in storeSellItemIds.OrderBy(p => byProducts.Contains(p) ? 0 : 1))
+            void UpdateSellItem(int itemID, float discountPercent)
             {
                 if (calc.TryGetCostPrice(itemID, out var price, out var reason, out var itemWarnings))
                 {
@@ -178,14 +189,23 @@ namespace TradeAssistant
                     // SellPrice - SellPrice * TaxRate = CostPrice * (1 + Profit)
                     // SellPrice * (1 - TaxRate) = CostPrice * (1 + Profit)
                     // SellPrice = CostPrice * (1 + Profit) / (1 - TaxRate)
-                    var newPrice = Mathf.RoundToAcceptedDigits(price * (1 + calc.Config.Profit / 100f) / (1 - calc.Store.GetTax()));
-                    updates.AddRange(calc.SetSellPrice(itemID, newPrice));
+                    var normalPrice = price * (1 + calc.Config.Profit / 100f) / (1 - calc.Store.GetTax());
+                    var newPrice = Mathf.RoundToAcceptedDigits(normalPrice * (1 - discountPercent / 100f));
+                    (discountPercent > 0 ? discountedUpdates : updates).AddRange(calc.SetSellPrice(itemID, newPrice));
                     if (itemWarnings != null)
                         warnings.AddRange(itemWarnings);
                 }
                 else if (!byProducts.Contains(itemID) && craftableItems.Contains(itemID))
                     output.AppendLineLoc($"Failed to get the cost price of {Item.Get(itemID).UILink()} ({TextLoc.FoldoutLoc($"Why?", $"Why {Item.Get(itemID).UILink()}", reason.ToStringLoc())}).");
             }
+
+            // 1) Regular items: priced with the configured profit percentage.
+            foreach (var itemID in normalItemIds.OrderBy(p => byProducts.Contains(p) ? 0 : 1))
+                UpdateSellItem(itemID, 0f);
+
+            // 2) "SOON TO EXPIRE" items: same cost basis, then the configured discount is applied.
+            foreach (var itemID in soonToExpireItemIds.OrderBy(p => byProducts.Contains(p) ? 0 : 1))
+                UpdateSellItem(itemID, calc.Config.SoonToExpireDiscount);
 
             foreach (var itemID in buyProductsToUpdate)
                 if (calc.TryGetCostPrice(itemID, out var price, out var _, out var _))
@@ -195,7 +215,7 @@ namespace TradeAssistant
             //if (warnings.Any())
             //    output.AppendLine(warnings.Select(w => "- " + w).Distinct().FoldoutListLoc("warning", Eco.Shared.Items.TooltipOrigin.None));
 
-            if (updates.Count == 0 && output.Length == 0)
+            if (updates.Count == 0 && discountedUpdates.Count == 0 && output.Length == 0)
                 user.TempServerMessage(Localizer.Do($"All prices are up to date!"));
             else
             {
@@ -203,8 +223,15 @@ namespace TradeAssistant
                 updates
                     .Where(u => !string.IsNullOrWhiteSpace(u))
                     .ForEach(u => output.AppendLine(u));
-                if (updates.Count > 0)
-                    output.AppendLineLoc($"Updated the price(s) of {Text.StyledNum(updates.Count)} order(s)");
+                if (discountedUpdates.Count > 0)
+                {
+                    output.AppendLineLoc($"Applied the \"SOON TO EXPIRE\" discount of {Text.StyledNum(calc.Config.SoonToExpireDiscount)}% to {Text.StyledNum(discountedUpdates.Count)} order(s):");
+                    discountedUpdates
+                        .Where(u => !string.IsNullOrWhiteSpace(u))
+                        .ForEach(u => output.AppendLine(u));
+                }
+                if (updates.Count + discountedUpdates.Count > 0)
+                    output.AppendLineLoc($"Updated the price(s) of {Text.StyledNum(updates.Count + discountedUpdates.Count)} order(s)");
                 user.TempServerMessage(output.ToStringLoc());
             }
         }
