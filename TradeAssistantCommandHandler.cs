@@ -36,6 +36,7 @@ namespace TradeAssistant
             sb.Append(Localizer.DoStr("- Once you're done with that the last step is to run ")).Append(Text.Name("/ta update")).AppendLine(Localizer.DoStr(", this will update the prices of all your sell orders based on your configured profit percentage and labor cost."));
             sb.AppendLine(Localizer.DoStr("- Optional: run /ta explainbuy <itemName> to see exactly how the buy price of an item is calculated, including the cost price breakdown."));
             sb.AppendLine(Localizer.DoStr("- Optional: use /ta discount <categoryName> <percent> to apply a discount to a whole sell category (e.g. /ta discount Tools 10). Use /ta discount list to review and /ta discount remove <categoryName> to clear one."));
+            sb.AppendLine(Localizer.DoStr("- Optional: run /ta autoreprice on to re-price your store automatically every N minutes (default 30) and whenever market activity or store offers change. Use /ta autoreprice interval <minutes> to change the interval, /ta autoreprice status to check and /ta autoreprice off to disable."));
 
             user.TempServerMessage(sb);
         }
@@ -149,104 +150,43 @@ namespace TradeAssistant
             var calc = await TradeAssistantCalculator.TryInitialize(user);
             if (calc == null) return;
 
-            var storeSellItemIds = calc.Store.StoreData.SellOffers
-                .SelectMany(o => o.OfferedItemTypeIDs())
-                .Where(typeID => !calc.Config.FrozenSellPrices.Contains(typeID))
-                .Distinct()
-                .ToList();
-            if (storeSellItemIds.Count == 0)
-            {
-                user.TempServerMessage(Localizer.Do($"{calc.Store.Parent.UILink()} has no sell orders."));
-                return;
-            }
-            var buyProductsToUpdate = calc.Store.StoreData.BuyOffers
-                .SelectMany(o => o.OfferedItemTypeIDs())
-                .Distinct()
-                .Where(storeSellItemIds.Contains)
-                .ToList();
-
-            // Items placed in a store category named "SOON TO EXPIRE" are updated separately:
-            // they get the player-configured discount percentage applied on top of the normal price.
-            // Only offers whose freshness qualifiers (min/max durability, 0..100) fall inside the
-            // configured [min, max] freshness window get the discount; fresh or unrestricted offers
-            // in that category are priced normally.
-            var soonToExpireItemIds = calc.Store.StoreData.SellCategories
-                .Where(c => !c.IsBuy && string.Equals(c.Name?.Trim(), "SOON TO EXPIRE", StringComparison.OrdinalIgnoreCase))
-                .SelectMany(c => c.Offers)
-                .Where(o => o.HasQualifiers && o.MinDurability >= calc.Config.SoonToExpireMinFreshness && o.MaxDurability <= calc.Config.SoonToExpireMaxFreshness)
-                .SelectMany(o => o.OfferedItemTypeIDs())
-                .Where(storeSellItemIds.Contains)
-                .ToHashSet();
-            var normalItemIds = storeSellItemIds.Where(id => !soonToExpireItemIds.Contains(id)).ToList();
-
-            var byProducts = calc.Config.ByProducts.ToHashSet();
-            var craftableItems = calc.CraftableItems.SelectMany(x => x.Value).Select(x => x.TypeID).Distinct().ToHashSet();
             var output = new StringBuilder();
-            var updates = new List<LocString>();
-            var discountedUpdates = new List<LocString>();
-            var warnings = new List<LocString>();
+            TradeAssistantRepricing.RunUpdate(calc, output);
+            user.TempServerMessage(output.ToStringLoc());
+        }
 
-            void UpdateSellItem(int itemID, float discountPercent)
+        [ChatSubCommand(nameof(TradeAssistant), "Enables, disables or shows the status of automatic re-pricing. Usage: /ta autoreprice <on|off|status|interval <minutes>>", ChatAuthorizationLevel.User)]
+        public static async Task AutoReprice(User user, string action, string? value = null)
+        {
+            var calc = await TradeAssistantCalculator.TryInitialize(user);
+            if (calc == null) return;
+
+            var config = calc.Config;
+            if (action.Equals("on", StringComparison.OrdinalIgnoreCase))
             {
-                if (calc.TryGetCostPrice(itemID, out var price, out var reason, out var itemWarnings))
-                {
-                    // SellPrice = Tax + CostPrice * (1 + Profit)
-                    // SellPrice = SellPrice * TaxRate + CostPrice * (1 + Profit)
-                    // SellPrice - SellPrice * TaxRate = CostPrice * (1 + Profit)
-                    // SellPrice * (1 - TaxRate) = CostPrice * (1 + Profit)
-                    // SellPrice = CostPrice * (1 + Profit) / (1 - TaxRate)
-                    var normalPrice = price * (1 + calc.Config.Profit / 100f) / (1 - calc.Store.GetTax());
-                    var discount = Math.Max(discountPercent, calc.DiscountPercentFor(itemID));
-                    var newPrice = Mathf.RoundToAcceptedDigits(normalPrice * (1 - discount / 100f));
-                    if (calc.Config.DurabilityPricingEnabled)
-                    {
-                        foreach (var offer in calc.Store.StoreData.SellOffers.Where(o => o.MatchesTypeID(itemID)).ToList())
-                            (discount > 0 ? discountedUpdates : updates).AddRange(calc.SetSellOfferPrice(offer, newPrice));
-                    }
-                    else
-                        (discount > 0 ? discountedUpdates : updates).AddRange(calc.SetSellPrice(itemID, newPrice));
-                    if (itemWarnings != null)
-                        warnings.AddRange(itemWarnings);
-                }
-                else if (!byProducts.Contains(itemID) && craftableItems.Contains(itemID))
-                    output.AppendLineLoc($"Failed to get the cost price of {Item.Get(itemID).UILink()} ({TextLoc.FoldoutLoc($"Why?", $"Why {Item.Get(itemID).UILink()}", reason.ToStringLoc())}).");
+                config.AutoRepricingEnabled = true;
+                StorageManager.Obj.MarkDirty(TradeAssistantData.Obj);
+                user.TempServerMessage(Localizer.Do($"Automatic re-pricing is now ON. Prices will be re-calculated every {Text.StyledNum(config.AutoRepricingIntervalMinutes)} minute(s) and after market changes. Run /ta update to apply it immediately."));
             }
-
-            // 1) Regular items: priced with the configured profit percentage.
-            foreach (var itemID in normalItemIds.OrderBy(p => byProducts.Contains(p) ? 0 : 1))
-                UpdateSellItem(itemID, 0f);
-
-            // 2) "SOON TO EXPIRE" items: same cost basis, then the configured discount is applied.
-            foreach (var itemID in soonToExpireItemIds.OrderBy(p => byProducts.Contains(p) ? 0 : 1))
-                UpdateSellItem(itemID, calc.Config.SoonToExpireDiscount);
-
-            foreach (var itemID in buyProductsToUpdate)
-                if (calc.TryGetCostPrice(itemID, out var price, out var _, out var _))
-                    updates.AddRange(calc.SetBuyPrice(itemID, price));
-
-            // TODO: I'm not happy with how warnings are working at the moment. Removing them for now.
-            //if (warnings.Any())
-            //    output.AppendLine(warnings.Select(w => "- " + w).Distinct().FoldoutListLoc("warning", Eco.Shared.Items.TooltipOrigin.None));
-
-            if (updates.Count == 0 && discountedUpdates.Count == 0 && output.Length == 0)
-                user.TempServerMessage(Localizer.Do($"All prices are up to date!"));
+            else if (action.Equals("off", StringComparison.OrdinalIgnoreCase))
+            {
+                config.AutoRepricingEnabled = false;
+                StorageManager.Obj.MarkDirty(TradeAssistantData.Obj);
+                user.TempServerMessage(Localizer.DoStr("Automatic re-pricing is now OFF."));
+            }
+            else if (action.Equals("interval", StringComparison.OrdinalIgnoreCase))
+            {
+                if (!float.TryParse(value, System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out var minutes) || minutes < 1f || minutes > 1440f)
+                {
+                    user.TempServerMessage(Localizer.DoStr("Please provide an interval between 1 and 1440 minutes."));
+                    return;
+                }
+                config.AutoRepricingIntervalMinutes = minutes;
+                StorageManager.Obj.MarkDirty(TradeAssistantData.Obj);
+                user.TempServerMessage(Localizer.Do($"Automatic re-pricing will now run every {Text.StyledNum(minutes)} minute(s)."));
+            }
             else
-            {
-                output.Insert(0, Localizer.Do($"Updating the sell prices at {calc.Store.Parent.UILink()}\n"));
-                updates
-                    .Where(u => !string.IsNullOrWhiteSpace(u))
-                    .ForEach(u => output.AppendLine(u));
-                if (discountedUpdates.Count > 0)
-                {
-                    output.AppendLineLoc($"Applied the \"SOON TO EXPIRE\" discount of {Text.StyledNum(calc.Config.SoonToExpireDiscount)}% to {Text.StyledNum(discountedUpdates.Count)} order(s):");
-                    discountedUpdates
-                        .Where(u => !string.IsNullOrWhiteSpace(u))
-                        .ForEach(u => output.AppendLine(u));
-                }
-                if (updates.Count + discountedUpdates.Count > 0)
-                    output.AppendLineLoc($"Updated the price(s) of {Text.StyledNum(updates.Count + discountedUpdates.Count)} order(s)");
-                user.TempServerMessage(output.ToStringLoc());
-            }
+                user.TempServerMessage(Localizer.Do($"Automatic re-pricing is {(config.AutoRepricingEnabled ? "ON" : "OFF")}, running every {Text.StyledNum(config.AutoRepricingIntervalMinutes)} minute(s). Usage: /ta autoreprice <on|off|status|interval <minutes>>"));
         }
         [ChatSubCommand(nameof(TradeAssistant), "Explains how the sell price is calculated for a product", ChatAuthorizationLevel.User)]
         public static async Task Explain(User user, string itemName, User? whoToSendTo = null)
