@@ -32,8 +32,10 @@ namespace TradeAssistant
         /// When <paramref name="output"/> is provided, the detailed per-order messages are written to it
         /// (matching the previous /ta update behaviour). When it is null the pass runs silently and only
         /// the result counts are returned.
+        /// When <paramref name="competitivePricing"/> is true, the configured competitive pricing rules
+        /// (per-category, with floor/ceiling protection) are applied to the matching sell offers.
         /// </summary>
-        public static RepricingResult RunUpdate(TradeAssistantCalculator calc, StringBuilder? output)
+        public static RepricingResult RunUpdate(TradeAssistantCalculator calc, StringBuilder? output, bool competitivePricing = false)
         {
             var storeSellItemIds = calc.Store.StoreData.SellOffers
                 .SelectMany(o => o.OfferedItemTypeIDs())
@@ -45,6 +47,32 @@ namespace TradeAssistant
                 output?.AppendLineLoc($"{calc.Store.Parent.UILink()} has no sell orders.");
                 return new RepricingResult(0, 0, 0);
             }
+
+            // Competitive pricing: items in enabled categories (or all items when no category is
+            // configured) may follow the lowest competing market price, protected by a floor
+            // (default 85% of the normal price) and an optional ceiling.
+            var competitiveItemIds = new HashSet<int>();
+            Dictionary<int, MarketStats>? marketSellStats = null;
+            if (competitivePricing && calc.Config.CompetitivePricingEnabled)
+            {
+                var allowed = calc.Config.CompetitiveCategories;
+                if (allowed == null || allowed.Count == 0)
+                    competitiveItemIds.UnionWith(storeSellItemIds);
+                else
+                {
+                    foreach (var cat in calc.Store.StoreData.SellCategories.Where(c => !c.IsBuy))
+                    {
+                        if (!allowed.Any(a => string.Equals(a, cat.Name?.Trim(), StringComparison.OrdinalIgnoreCase)))
+                            continue;
+                        foreach (var offer in cat.Offers)
+                            foreach (var id in offer.OfferedItemTypeIDs())
+                                if (storeSellItemIds.Contains(id))
+                                    competitiveItemIds.Add(id);
+                    }
+                }
+                marketSellStats = TradeAssistantMarket.ComputeMarket(sellOffers: true);
+            }
+
             var buyProductsToUpdate = calc.Store.StoreData.BuyOffers
                 .SelectMany(o => o.OfferedItemTypeIDs())
                 .Distinct()
@@ -84,6 +112,26 @@ namespace TradeAssistant
                     var normalPrice = price * (1 + calc.Config.Profit / 100f) / (1 - calc.Store.GetTax());
                     var discount = Math.Max(discountPercent, calc.DiscountPercentFor(itemID));
                     var newPrice = Mathf.RoundToAcceptedDigits(normalPrice * (1 - discount / 100f));
+                    if (competitiveItemIds.Contains(itemID))
+                    {
+                        // Follow the lowest competing market price, but never below the configured
+                        // floor (default 85% of the normal price). Optionally also follow higher
+                        // market prices, capped by the configured ceiling.
+                        if (marketSellStats != null && marketSellStats.TryGetValue(itemID, out var stats) && stats.OfferCount > 0)
+                        {
+                            var marketMin = stats.MinPrice;
+                            if (marketMin < normalPrice)
+                            {
+                                var floor = calc.Config.CompetitiveFloorPercent > 0f ? normalPrice * calc.Config.CompetitiveFloorPercent / 100f : 0f;
+                                newPrice = Mathf.RoundToAcceptedDigits(Math.Max(marketMin, floor));
+                            }
+                            else if (marketMin > normalPrice && calc.Config.CompetitiveCeilingPercent > 0f)
+                            {
+                                var bound = normalPrice * (1 + calc.Config.CompetitiveCeilingPercent / 100f);
+                                newPrice = Mathf.RoundToAcceptedDigits(Math.Min(marketMin, bound));
+                            }
+                        }
+                    }
                     if (calc.Config.DurabilityPricingEnabled)
                     {
                         foreach (var offer in calc.Store.StoreData.SellOffers.Where(o => o.MatchesTypeID(itemID)).ToList())

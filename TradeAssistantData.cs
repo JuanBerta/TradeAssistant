@@ -39,6 +39,10 @@ namespace TradeAssistant
         [Serialized] public ThreadSafeDictionary<string, float> CategoryDiscounts { get; set; } = new();
         [Serialized] public bool AutoRepricingEnabled { get; set; } = false;
         [Serialized] public float AutoRepricingIntervalMinutes { get; set; } = 30f;
+        [Serialized] public bool CompetitivePricingEnabled { get; set; } = false;
+        [Serialized] public float CompetitiveFloorPercent { get; set; } = 85f;
+        [Serialized] public float CompetitiveCeilingPercent { get; set; } = 0f;
+        [Serialized] public ThreadSafeList<string> CompetitiveCategories { get; set; } = new();
 
         public UserConfigUI ToUI()
         {
@@ -50,7 +54,10 @@ namespace TradeAssistant
                 SoonToExpireMinFreshness = SoonToExpireMinFreshness,
                 SoonToExpireMaxFreshness = SoonToExpireMaxFreshness,
                 AutoRepricingEnabled = AutoRepricingEnabled,
-                AutoRepricingIntervalMinutes = AutoRepricingIntervalMinutes
+                AutoRepricingIntervalMinutes = AutoRepricingIntervalMinutes,
+                CompetitivePricingEnabled = CompetitivePricingEnabled,
+                CompetitiveFloorPercent = CompetitiveFloorPercent,
+                CompetitiveCeilingPercent = CompetitiveCeilingPercent
             };
             ByProducts.Select(id => Item.Get(id)).Where(p => p != null).ForEach(ui.ByProducts.Add);
             FrozenSellPrices.Select(id => Item.Get(id)).Where(p => p != null).ForEach(ui.FrozenSellPrices.Add);
@@ -87,6 +94,9 @@ namespace TradeAssistant
         [Eco, Range(0f, 100f)] public float SoonToExpireMaxFreshness { get; set; } = 50f;
         [Eco] public bool AutoRepricingEnabled { get; set; } = false;
         [Eco, Range(1f, 1440f)] public float AutoRepricingIntervalMinutes { get; set; } = 30f;
+        [Eco] public bool CompetitivePricingEnabled { get; set; } = false;
+        [Eco, Range(0f, 100f)] public float CompetitiveFloorPercent { get; set; } = 85f;
+        [Eco, Range(0f, 100f)] public float CompetitiveCeilingPercent { get; set; } = 0f;
         [Eco, AllowEmpty] public ControllerList<Item> ByProducts { get; set; }
         [Eco, AllowEmpty] public ControllerList<Item> FrozenSellPrices { get; set; }
         [Eco, AllowEmpty] public ControllerList<User> Partners { get; set; }

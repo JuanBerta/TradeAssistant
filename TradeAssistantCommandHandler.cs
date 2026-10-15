@@ -39,6 +39,7 @@ namespace TradeAssistant
             sb.AppendLine(Localizer.DoStr("- Optional: run /ta autoreprice on to re-price your store automatically every N minutes (default 30) and whenever market activity or store offers change. Use /ta autoreprice interval <minutes> to change the interval, /ta autoreprice status to check and /ta autoreprice off to disable."));
             sb.AppendLine(Localizer.DoStr("- Optional: run /ta autobuyprices to recalculate your buy order prices from your sell prices and profit, so you never buy ingredients that eat your profit. Pass an item name to only recalculate that item: /ta autobuyprices <itemName>."));
             sb.AppendLine(Localizer.DoStr("- Optional: use /ta exchange status to compare your store prices with the current market (exchange) average/min/max across all player stores, and /ta exchange price <avg|min> [sell|buy] to sync your orders to that market baseline."));
+            sb.AppendLine(Localizer.DoStr("- Optional: use /ta competitive on [floorPercent] to follow the lowest competing market price while keeping prices inside your profit range (default floor: 85% of the normal price). Restrict it to categories with /ta competitive category add <name>, review with /ta competitive status and disable with /ta competitive off."));
 
             user.TempServerMessage(sb);
         }
@@ -153,8 +154,72 @@ namespace TradeAssistant
             if (calc == null) return;
 
             var output = new StringBuilder();
-            TradeAssistantRepricing.RunUpdate(calc, output);
+            TradeAssistantRepricing.RunUpdate(calc, output, competitivePricing: true);
             user.TempServerMessage(output.ToStringLoc());
+        }
+
+        [ChatSubCommand(nameof(TradeAssistant), "Manages competitive pricing rules: follow the lowest competing market price within your configured profit range, with floor/ceiling protection. Usage: /ta competitive <on|off|status|category <add|remove> <name>> [floorPercent] [category...]", ChatAuthorizationLevel.User)]
+        public static async Task Competitive(User user, string action, string? value = null)
+        {
+            var calc = await TradeAssistantCalculator.TryInitialize(user);
+            if (calc == null) return;
+
+            var config = calc.Config;
+            if (action.Equals("on", StringComparison.OrdinalIgnoreCase))
+            {
+                config.CompetitivePricingEnabled = true;
+                if (!string.IsNullOrWhiteSpace(value) && float.TryParse(value, System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out var floor))
+                    config.CompetitiveFloorPercent = Math.Clamp(floor, 0f, 100f);
+                StorageManager.Obj.MarkDirty(TradeAssistantData.Obj);
+                user.TempServerMessage(Localizer.DoStr($"Competitive pricing enabled. Prices will follow the lowest market price down to {Text.StyledNum(config.CompetitiveFloorPercent)}% of the normal price. Run /ta update to apply."));
+            }
+            else if (action.Equals("off", StringComparison.OrdinalIgnoreCase))
+            {
+                config.CompetitivePricingEnabled = false;
+                StorageManager.Obj.MarkDirty(TradeAssistantData.Obj);
+                user.TempServerMessage(Localizer.DoStr("Competitive pricing is now OFF. Run /ta update to restore normal prices."));
+            }
+            else if (action.Equals("status", StringComparison.OrdinalIgnoreCase))
+            {
+                var msg = new StringBuilder();
+                msg.AppendLineLoc($"Competitive pricing: {(config.CompetitivePricingEnabled ? "ON" : "OFF")}");
+                msg.AppendLineLoc($"Floor protection: {Text.StyledNum(config.CompetitiveFloorPercent)}% of the normal price (0 disables the floor).");
+                msg.AppendLineLoc($"Ceiling protection: {Text.StyledNum(config.CompetitiveCeilingPercent)}% above the normal price (0 disables the ceiling).");
+                var cats = config.CompetitiveCategories;
+                if (cats.Count == 0)
+                    msg.AppendLine(Localizer.DoStr("Enabled categories: all categories"));
+                else
+                    msg.AppendLine(Localizer.Do($"Enabled categories: {string.Join(", ", cats)}"));
+                user.TempServerMessage(msg);
+            }
+            else if (action.Equals("category", StringComparison.OrdinalIgnoreCase))
+            {
+                var parts = (value ?? "").Split(' ', StringSplitOptions.RemoveEmptyEntries);
+                if (parts.Length < 2)
+                {
+                    user.TempServerMessage(Localizer.DoStr("Usage: /ta competitive category <add|remove> <categoryName>"));
+                    return;
+                }
+                var name = string.Join(" ", parts.Skip(1));
+                if (parts[0].Equals("add", StringComparison.OrdinalIgnoreCase))
+                {
+                    if (!config.CompetitiveCategories.Any(c => string.Equals(c, name, StringComparison.OrdinalIgnoreCase)))
+                        config.CompetitiveCategories.Add(name);
+                    user.TempServerMessage(Localizer.Do($"Category '{Text.Info(name)}' added to competitive pricing."));
+                }
+                else if (parts[0].Equals("remove", StringComparison.OrdinalIgnoreCase))
+                {
+                    var removed = config.CompetitiveCategories.FirstOrDefault(c => string.Equals(c, name, StringComparison.OrdinalIgnoreCase));
+                    if (removed != null)
+                        config.CompetitiveCategories.Remove(removed);
+                    user.TempServerMessage(Localizer.Do($"Category '{Text.Info(name)}' removed from competitive pricing."));
+                }
+                else
+                    user.TempServerMessage(Localizer.DoStr("Usage: /ta competitive category <add|remove> <categoryName>"));
+                StorageManager.Obj.MarkDirty(TradeAssistantData.Obj);
+            }
+            else
+                user.TempServerMessage(Localizer.DoStr("Usage: /ta competitive <on|off|status|category <add|remove> <name>>"));
         }
 
         [ChatSubCommand(nameof(TradeAssistant), "Enables, disables or shows the status of automatic re-pricing. Usage: /ta autoreprice <on|off|status|interval <minutes>>", ChatAuthorizationLevel.User)]
