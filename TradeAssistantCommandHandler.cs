@@ -38,6 +38,7 @@ namespace TradeAssistant
             sb.AppendLine(Localizer.DoStr("- Optional: use /ta discount <categoryName> <percent> to apply a discount to a whole sell category (e.g. /ta discount Tools 10). Use /ta discount list to review and /ta discount remove <categoryName> to clear one."));
             sb.AppendLine(Localizer.DoStr("- Optional: run /ta autoreprice on to re-price your store automatically every N minutes (default 30) and whenever market activity or store offers change. Use /ta autoreprice interval <minutes> to change the interval, /ta autoreprice status to check and /ta autoreprice off to disable."));
             sb.AppendLine(Localizer.DoStr("- Optional: run /ta autobuyprices to recalculate your buy order prices from your sell prices and profit, so you never buy ingredients that eat your profit. Pass an item name to only recalculate that item: /ta autobuyprices <itemName>."));
+            sb.AppendLine(Localizer.DoStr("- Optional: use /ta exchange status to compare your store prices with the current market (exchange) average/min/max across all player stores, and /ta exchange price <avg|min> [sell|buy] to sync your orders to that market baseline."));
 
             user.TempServerMessage(sb);
         }
@@ -234,6 +235,95 @@ namespace TradeAssistant
             output.AppendLineLoc($"Updated the buy price(s) of {Text.StyledNum(updated)} item(s).");
             user.TempServerMessage(output.ToStringLoc());
         }
+
+        [ChatSubCommand(nameof(TradeAssistant), "Shows the current market (exchange) average, min and max prices for your store's items compared to your own prices. Usage: /ta exchange status", ChatAuthorizationLevel.User)]
+        public static async Task ExchangeStatus(User user)
+        {
+            var calc = await TradeAssistantCalculator.TryInitialize(user);
+            if (calc == null) return;
+
+            var sellStats = TradeAssistantMarket.ComputeMarket(sellOffers: true);
+            var buyStats = TradeAssistantMarket.ComputeMarket(sellOffers: false);
+
+            var output = new StringBuilder();
+            output.AppendLineLoc($"Market (exchange) comparison for {calc.Store.Parent.UILink()}:");
+            output.AppendLine(Localizer.DoStr("SELL OFFERS:"));
+            var sellItems = calc.Store.StoreData.SellOffers.SelectMany(o => o.OfferedItemTypeIDs()).Distinct().ToList();
+            foreach (var itemID in sellItems)
+            {
+                var item = Item.Get(itemID);
+                if (item == null) continue;
+                var mine = calc.Store.StoreData.SellOffers.SelectMany(o => o.OfferedItemTypeIDs().Where(id => id == itemID).Select(_ => o.Price)).DefaultIfEmpty(0f).Min();
+                if (!sellStats.TryGetValue(itemID, out var market))
+                {
+                    output.AppendLine($"- {item.UILink()}: mine {Text.StyledNum(mine)} - no other market orders");
+                    continue;
+                }
+                output.AppendLine($"- {item.UILink()}: mine {Text.StyledNum(mine)} | market {TradeAssistantMarket.Describe(market)}");
+            }
+            output.AppendLine(Localizer.DoStr("BUY OFFERS:"));
+            var buyItems = calc.Store.StoreData.BuyOffers.SelectMany(o => o.OfferedItemTypeIDs()).Distinct().ToList();
+            foreach (var itemID in buyItems)
+            {
+                var item = Item.Get(itemID);
+                if (item == null) continue;
+                var mine = calc.Store.StoreData.BuyOffers.SelectMany(o => o.OfferedItemTypeIDs().Where(id => id == itemID).Select(_ => o.Price)).DefaultIfEmpty(0f).Min();
+                if (!buyStats.TryGetValue(itemID, out var market))
+                {
+                    output.AppendLine($"- {item.UILink()}: mine {Text.StyledNum(mine)} - no other market orders");
+                    continue;
+                }
+                output.AppendLine($"- {item.UILink()}: mine {Text.StyledNum(mine)} | market {TradeAssistantMarket.Describe(market)}");
+            }
+            user.TempServerMessage(output.ToStringLoc());
+        }
+
+        [ChatSubCommand(nameof(TradeAssistant), "Sets your store prices to the market (exchange) baseline. Usage: /ta exchange price <avg|min> [sell|buy]", ChatAuthorizationLevel.User)]
+        public static async Task ExchangePrice(User user, string basis, string side = "sell")
+        {
+            var calc = await TradeAssistantCalculator.TryInitialize(user);
+            if (calc == null) return;
+
+            var useAverage = basis.Equals("avg", StringComparison.OrdinalIgnoreCase);
+            var useMin = basis.Equals("min", StringComparison.OrdinalIgnoreCase);
+            if (!useAverage && !useMin)
+            {
+                user.TempServerMessage(Localizer.DoStr("Usage: /ta exchange price <avg|min> [sell|buy]"));
+                return;
+            }
+            var buySide = side.Equals("buy", StringComparison.OrdinalIgnoreCase);
+            if (!buySide && !side.Equals("sell", StringComparison.OrdinalIgnoreCase))
+            {
+                user.TempServerMessage(Localizer.DoStr("Usage: /ta exchange price <avg|min> [sell|buy]"));
+                return;
+            }
+
+            var market = TradeAssistantMarket.ComputeMarket(sellOffers: !buySide);
+            var offers = (buySide ? calc.Store.StoreData.BuyOffers : calc.Store.StoreData.SellOffers).ToList();
+            var output = new StringBuilder();
+            output.AppendLineLoc($"Syncing {(buySide ? "buy" : "sell")} orders to the market {(useAverage ? "average" : "minimum")} price...");
+            var updated = 0;
+            var missing = 0;
+            foreach (var typeID in offers.SelectMany(o => o.OfferedItemTypeIDs()).Distinct().ToList())
+            {
+                var item = Item.Get(typeID);
+                if (item == null) continue;
+                if (!market.TryGetValue(typeID, out var stats) || stats.OfferCount == 0)
+                {
+                    missing++;
+                    output.AppendLine($"- {item.UILink()}: no market orders, skipped");
+                    continue;
+                }
+                var newPrice = useAverage ? stats.AveragePrice : stats.MinPrice;
+                if (buySide) calc.SetBuyPrice(typeID, newPrice);
+                else calc.SetSellPrice(typeID, newPrice);
+                updated++;
+                output.AppendLine($"- {item.UILink()}: {Text.StyledNum(newPrice)} ({TradeAssistantMarket.Describe(stats)})");
+            }
+            output.AppendLineLoc($"Updated {Text.StyledNum(updated)} order(s), skipped {Text.StyledNum(missing)} item(s) without market data.");
+            user.TempServerMessage(output.ToStringLoc());
+        }
+
         [ChatSubCommand(nameof(TradeAssistant), "Explains how the sell price is calculated for a product", ChatAuthorizationLevel.User)]
         public static async Task Explain(User user, string itemName, User? whoToSendTo = null)
         {
