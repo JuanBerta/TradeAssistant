@@ -63,6 +63,7 @@ namespace TradeAssistant
         public static async Task<TradeAssistantCalculator?> TryInitialize(User user)
         {
             var sb = new StringBuilder();
+            var config = user.Config();
             var deed = GetDeed(sb, user);
             if (deed == null)
             {
@@ -70,7 +71,7 @@ namespace TradeAssistant
                 return null;
             }
 
-            var store = await GetStore(sb, user, deed);
+            var store = await GetStore(sb, user, deed, config);
             if (store == null)
             {
                 user.TempServerMessage(sb);
@@ -80,13 +81,13 @@ namespace TradeAssistant
             if (TryGetStoreAndCraftingTables(sb, user, deed, out var craftingTables, out var craftableItems))
             {
                 //If the profit % is set to -100% the mod calculations won't work
-                if (user.Config().Profit == -100f)
+                if (config.Profit == -100f)
                 {
                     user.TempServerMessage(Localizer.Do($"Price calculations won't work your profit is set to -100%"));
                     return null;
                 }
 
-                return new TradeAssistantCalculator(store!, craftingTables!, craftableItems!, user, user.Config());
+                return new TradeAssistantCalculator(store!, craftingTables!, craftableItems!, user, config);
             }
             user.TempServerMessage(sb);
             return null;
@@ -412,19 +413,33 @@ namespace TradeAssistant
             }
             return deedStandingIn;
         }
-        private static async Task<StoreComponent?> GetStore(StringBuilder sb, User user, Deed deed)
+        private static async Task<StoreComponent?> GetStore(StringBuilder sb, User user, Deed deed, UserConfig config)
         {
             var stores = WorldObjectUtil.AllObjsWithComponent<StoreComponent>()
                 .Where(store => store.IsRPCAuthorized(user.Player, AccessType.FullAccess, Array.Empty<object>())
                     && deed.Plots.Any(p => p.PlotPos == store.Parent.PlotPos()))
                 .OrderBy(store => World.WrappedDistance(user.Player.WorldPos(), store.Parent.WorldPos()))
-                .Take(2)
                 .ToList();
             if (stores.Count == 0)
             {
                 sb.AppendLine(Localizer.Do($"You don't have a store you have owner access to in the plot you are standing in"));
                 return null;
             }
+
+            // Multi-store support: when the player explicitly selected a store with /ta store select,
+            // use it without asking, as long as it sits in the deed they are standing in.
+            if (!string.IsNullOrWhiteSpace(config.SelectedStoreName))
+            {
+                var selected = stores.FirstOrDefault(s =>
+                    string.Equals(s.Parent.Name, config.SelectedStoreName, StringComparison.OrdinalIgnoreCase) ||
+                    string.Equals(s.Parent.DisplayName, config.SelectedStoreName, StringComparison.OrdinalIgnoreCase));
+                if (selected != null)
+                    return selected;
+
+                sb.AppendLine(Localizer.Do($"The selected store '{Text.Info(config.SelectedStoreName)}' is not in the deed you are standing in. Run /ta store list to see your stores and /ta store select <name> to switch, or /ta store clear to fall back to the nearest store."));
+                return null;
+            }
+
             var store = stores.First();
 
             if (stores.Count == 1 || await user.ConfirmBoxLoc($"You have multiple stores on your Plot, please confirm to apply the command to the nearest store: {store.Parent.MarkedUpName}"))
