@@ -98,7 +98,7 @@ namespace TradeAssistant
                 var calc = await TradeAssistantCalculator.TryInitialize(user);
                 if (calc == null) return;
 
-                var result = TradeAssistantRepricing.RunUpdate(calc, null);
+                var result = TradeAssistantRepricing.RunUpdate(calc, null, competitivePricing: true);
                 if (result.TotalUpdates == 0)
                     return;
 
