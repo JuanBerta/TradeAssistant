@@ -1,17 +1,17 @@
-# Deutsch (German) translations for Trade Assistant.
+﻿# Deutsch (German) translations for Trade Assistant.
 # Translations are loaded by Eco from the mod's Locales folder at runtime.
 
 msgid "- Next up run the "
-msgstr "- Als Nächstes führe aus: "
+msgstr "- Als NÃ¤chstes fÃ¼hre aus: "
 
 msgid "- Now go through your buy orders and set the buy prices as well as the buy limits for each item."
-msgstr "- Gehe nun deine Kaufangebote durch und setze Kaufpreise sowie Kauflimits für jeden Artikel."
+msgstr "- Gehe nun deine Kaufangebote durch und setze Kaufpreise sowie Kauflimits fÃ¼r jeden Artikel."
 
 msgid "- Once you're done with that the last step is to run "
 msgstr "- Wenn du damit fertig bist, ist der letzte Schritt: "
 
 msgid "- Run "
-msgstr "- Führe aus: "
+msgstr "- FÃ¼hre aus: "
 
 msgid "- The first step is to run "
 msgstr "- Der erste Schritt ist: "
@@ -20,7 +20,7 @@ msgid "Mods"
 msgstr "Mods"
 
 msgid "This mod will help you setup your store by adding buy and sell orders onto it and updating the sell order prices based on your profit configurations you've setup."
-msgstr "Dieser Mod hilft dir, deinen Laden einzurichten, indem er Kauf- und Verkaufsangebote hinzufügt und die Verkaufspreise basierend auf deinen Gewinneinstellungen aktualisiert."
+msgstr "Dieser Mod hilft dir, deinen Laden einzurichten, indem er Kauf- und Verkaufsangebote hinzufÃ¼gt und die Verkaufspreise basierend auf deinen Gewinneinstellungen aktualisiert."
 
 msgid "Trade Assistant Configuration"
 msgstr "Trade Assistant Konfiguration"
@@ -42,3 +42,13 @@ msgstr ""
 
 msgid "- Optional: run /ta autoreprice on to re-price your store automatically every N minutes (default 30) and whenever market activity or store offers change. Use /ta autoreprice interval <minutes> to change the interval, /ta autoreprice status to check and /ta autoreprice off to disable."
 msgstr ""
+
+msgid "- Optional: use /ta exchange status to compare your store prices with the current market (exchange) average/min/max across all player stores, and /ta exchange price <avg|min> [sell|buy] to sync your orders to that market baseline."
+msgstr ""
+
+msgid "SELL OFFERS:"
+msgstr ""
+
+msgid "BUY OFFERS:"
+msgstr ""
+
