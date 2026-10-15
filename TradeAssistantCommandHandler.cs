@@ -37,6 +37,7 @@ namespace TradeAssistant
             sb.AppendLine(Localizer.DoStr("- Optional: run /ta explainbuy <itemName> to see exactly how the buy price of an item is calculated, including the cost price breakdown."));
             sb.AppendLine(Localizer.DoStr("- Optional: use /ta discount <categoryName> <percent> to apply a discount to a whole sell category (e.g. /ta discount Tools 10). Use /ta discount list to review and /ta discount remove <categoryName> to clear one."));
             sb.AppendLine(Localizer.DoStr("- Optional: run /ta autoreprice on to re-price your store automatically every N minutes (default 30) and whenever market activity or store offers change. Use /ta autoreprice interval <minutes> to change the interval, /ta autoreprice status to check and /ta autoreprice off to disable."));
+            sb.AppendLine(Localizer.DoStr("- Optional: run /ta autobuyprices to recalculate your buy order prices from your sell prices and profit, so you never buy ingredients that eat your profit. Pass an item name to only recalculate that item: /ta autobuyprices <itemName>."));
 
             user.TempServerMessage(sb);
         }
@@ -187,6 +188,51 @@ namespace TradeAssistant
             }
             else
                 user.TempServerMessage(Localizer.Do($"Automatic re-pricing is {(config.AutoRepricingEnabled ? "ON" : "OFF")}, running every {Text.StyledNum(config.AutoRepricingIntervalMinutes)} minute(s). Usage: /ta autoreprice <on|off|status|interval <minutes>>"));
+        }
+
+        [ChatSubCommand(nameof(TradeAssistant), "Automatically calculates the buy price of each buy order from your sell prices and configured profit, so you never buy ingredients that eat your profit. Usage: /ta autobuyprices [itemName]", ChatAuthorizationLevel.User)]
+        public static async Task AutoBuyPrices(User user, string? itemName = null)
+        {
+            var calc = await TradeAssistantCalculator.TryInitialize(user);
+            if (calc == null) return;
+
+            var itemIDs = calc.Store.StoreData.BuyOffers.SelectMany(o => o.OfferedItemTypeIDs()).Distinct().ToList();
+            if (!string.IsNullOrWhiteSpace(itemName))
+            {
+                var match = itemIDs.Select(Item.Get).Where(i => i != null)
+                    .FirstOrDefault(i => i.Name.Equals(itemName, StringComparison.OrdinalIgnoreCase) || i.Name.Contains(itemName, StringComparison.OrdinalIgnoreCase));
+                if (match == null)
+                {
+                    user.TempServerMessage(Localizer.Do($"No buy order matches '{Text.Info(itemName)}'."));
+                    return;
+                }
+                itemIDs = new List<int> { match.TypeID };
+            }
+
+            if (itemIDs.Count == 0)
+            {
+                user.TempServerMessage(Localizer.DoStr("Your store has no buy orders to price. Run /ta setupbuy first."));
+                return;
+            }
+
+            var output = new StringBuilder();
+            output.AppendLineLoc($"Calculating maximum buy prices for {Text.StyledNum(itemIDs.Count)} item(s)...");
+            var updated = 0;
+            foreach (var itemID in itemIDs)
+            {
+                var item = Item.Get(itemID);
+                if (item == null) continue;
+                if (!calc.TryGetMaxBuyPriceForIngredient(item, out var maxPrice, out var reason))
+                {
+                    output.AppendLine($"- {item.UILink()}: {reason}");
+                    continue;
+                }
+                calc.SetBuyPrice(itemID, maxPrice);
+                updated++;
+                output.AppendLine($"- {item.UILink()}: max buy price set to {Text.StyledNum(maxPrice)}. {TextLoc.FoldoutLoc($"Why?", $"Why {item.UILink()}", reason.ToStringLoc())}");
+            }
+            output.AppendLineLoc($"Updated the buy price(s) of {Text.StyledNum(updated)} item(s).");
+            user.TempServerMessage(output.ToStringLoc());
         }
         [ChatSubCommand(nameof(TradeAssistant), "Explains how the sell price is calculated for a product", ChatAuthorizationLevel.User)]
         public static async Task Explain(User user, string itemName, User? whoToSendTo = null)
