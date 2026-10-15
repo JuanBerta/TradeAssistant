@@ -43,6 +43,7 @@ namespace TradeAssistant
         [Serialized] public float CompetitiveFloorPercent { get; set; } = 85f;
         [Serialized] public float CompetitiveCeilingPercent { get; set; } = 0f;
         [Serialized] public ThreadSafeList<string> CompetitiveCategories { get; set; } = new();
+        [Serialized] public string? SelectedStoreName { get; set; } = null;
 
         public UserConfigUI ToUI()
         {

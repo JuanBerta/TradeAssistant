@@ -1,7 +1,11 @@
 ﻿using Eco.Core.Plugins;
+using Eco.Gameplay.Components;
+using Eco.Gameplay.Components.Store;
 using Eco.Gameplay.Economy;
 using Eco.Gameplay.Items;
+using Eco.Gameplay.Objects;
 using Eco.Gameplay.Players;
+using Eco.Gameplay.Property;
 using Eco.Gameplay.StrangeCloudGameplay;
 using Eco.Gameplay.Systems;
 using Eco.Gameplay.Systems.EcoMarketplace;
@@ -9,8 +13,11 @@ using Eco.Gameplay.Systems.Messaging.Chat.Commands;
 using Eco.Gameplay.Systems.TextLinks;
 using Eco.Gameplay.Utils;
 using Eco.Shared;
+using Eco.Shared.Items;
 using Eco.Shared.Localization;
+using Eco.Shared.Math;
 using Eco.Shared.Utils;
+using Eco.Shared.Voxel;
 using System.Text;
 
 namespace TradeAssistant
@@ -40,6 +47,7 @@ namespace TradeAssistant
             sb.AppendLine(Localizer.DoStr("- Optional: run /ta autobuyprices to recalculate your buy order prices from your sell prices and profit, so you never buy ingredients that eat your profit. Pass an item name to only recalculate that item: /ta autobuyprices <itemName>."));
             sb.AppendLine(Localizer.DoStr("- Optional: use /ta exchange status to compare your store prices with the current market (exchange) average/min/max across all player stores, and /ta exchange price <avg|min> [sell|buy] to sync your orders to that market baseline."));
             sb.AppendLine(Localizer.DoStr("- Optional: use /ta competitive on [floorPercent] to follow the lowest competing market price while keeping prices inside your profit range (default floor: 85% of the normal price). Restrict it to categories with /ta competitive category add <name>, review with /ta competitive status and disable with /ta competitive off."));
+            sb.AppendLine(Localizer.DoStr("- Optional: use /ta exportconfig to get your whole configuration as a copy/paste payload and /ta importconfig <payload> to restore it on another server. If you own several stores, manage which one /ta commands apply to with /ta store list, /ta store select <name> and /ta store clear."));
 
             user.TempServerMessage(sb);
         }
@@ -690,6 +698,103 @@ namespace TradeAssistant
                     config.UpdateFromUI(uiConfig);
                 StorageManager.Obj.MarkDirty(TradeAssistantData.Obj);
             }
+        }
+
+        [ChatSubCommand(nameof(TradeAssistant), "Exports your whole Trade Assistant configuration as a JSON payload you can restore on another server with /ta importconfig. Usage: /ta exportconfig", ChatAuthorizationLevel.User)]
+        public static async Task ExportConfig(User user)
+        {
+            var config = user.Config();
+            var (json, base64) = TradeAssistantConfigIO.Export(config);
+            var sb = new StringBuilder();
+            sb.AppendLineLoc($"Your Trade Assistant configuration has been exported. Run /ta importconfig with the payload below on the target server.");
+            sb.AppendLineLoc($"PAYLOAD (copy everything between the quotes):");
+            sb.AppendLine(base64);
+            sb.AppendLineLoc($"Human readable JSON:");
+            sb.AppendLine(json);
+            user.TempServerMessage(sb);
+        }
+
+        [ChatSubCommand(nameof(TradeAssistant), "Imports a Trade Assistant configuration exported with /ta exportconfig (paste the PAYLOAD). Usage: /ta importconfig <payload>", ChatAuthorizationLevel.User)]
+        public static async Task ImportConfig(User user, string payload)
+        {
+            if (string.IsNullOrWhiteSpace(payload))
+            {
+                user.TempServerMessage(Localizer.DoStr("Usage: /ta importconfig <payload> (get one with /ta exportconfig)"));
+                return;
+            }
+
+            try
+            {
+                var (config, warnings) = TradeAssistantConfigIO.Import(payload);
+                TradeAssistantData.Obj.UserConfiguration[user.Id] = config;
+                StorageManager.Obj.MarkDirty(TradeAssistantData.Obj);
+                var sb = new StringBuilder();
+                sb.AppendLineLoc($"Configuration imported successfully. Run /ta update to apply it to your store.");
+                if (warnings.Count > 0)
+                {
+                    sb.AppendLineLoc($"Warnings ({warnings.Count}):");
+                    foreach (var warning in warnings)
+                        sb.AppendLine($"- {Localizer.DoStr(warning)}");
+                }
+                user.TempServerMessage(sb);
+            }
+            catch (Exception e)
+            {
+                user.TempServerMessage(Localizer.Do($"Could not import the configuration: {e.Message}. Make sure you copied the full PAYLOAD from /ta exportconfig."));
+            }
+        }
+
+        [ChatSubCommand(nameof(TradeAssistant), "Lists all the stores you have owner access to, so you can manage which one /ta commands apply to. Usage: /ta store list", ChatAuthorizationLevel.User)]
+        public static async Task StoreList(User user)
+        {
+            var stores = WorldObjectUtil.AllObjsWithComponent<StoreComponent>()
+                .Where(store => store.IsRPCAuthorized(user.Player, AccessType.FullAccess, Array.Empty<object>()))
+                .OrderBy(store => World.WrappedDistance(user.Player.WorldPos(), store.Parent.WorldPos()))
+                .ToList();
+            if (stores.Count == 0)
+            {
+                user.TempServerMessage(Localizer.DoStr("You don't have any store you have owner access to."));
+                return;
+            }
+
+            var sb = new StringBuilder();
+            sb.AppendLineLoc($"Your stores ({stores.Count}):");
+            foreach (var store in stores)
+            {
+                var distance = (int)Math.Round(World.WrappedDistance(user.Player.WorldPos(), store.Parent.WorldPos()));
+                sb.AppendLineLoc($"- {store.Parent.UILink()} ({Text.StyledNum(distance)}m away)");
+            }
+            var selected = user.Config().SelectedStoreName;
+            sb.AppendLineLoc($"Currently selected: {(string.IsNullOrWhiteSpace(selected) ? "none - the nearest store is used" : selected)}");
+            user.TempServerMessage(sb);
+        }
+
+        [ChatSubCommand(nameof(TradeAssistant), "Selects the store that /ta commands should manage. Stand in its deed afterwards and the selection is remembered. Usage: /ta store select <name>", ChatAuthorizationLevel.User)]
+        public static async Task StoreSelect(User user, string name)
+        {
+            var store = WorldObjectUtil.AllObjsWithComponent<StoreComponent>()
+                .Where(s => s.IsRPCAuthorized(user.Player, AccessType.FullAccess, Array.Empty<object>()))
+                .FirstOrDefault(s =>
+                    string.Equals(s.Parent.Name, name, StringComparison.OrdinalIgnoreCase) ||
+                    string.Equals(s.Parent.DisplayName, name, StringComparison.OrdinalIgnoreCase) ||
+                    s.Parent.Name.Contains(name, StringComparison.OrdinalIgnoreCase));
+            if (store == null)
+            {
+                user.TempServerMessage(Localizer.Do($"No store named '{Text.Info(name)}' found. Run /ta store list to see your stores."));
+                return;
+            }
+
+            user.Config().SelectedStoreName = store.Parent.Name;
+            StorageManager.Obj.MarkDirty(TradeAssistantData.Obj);
+            user.TempServerMessage(Localizer.Do($"Selected store: {store.Parent.UILink()}. /ta commands will use it when you stand in its deed."));
+        }
+
+        [ChatSubCommand(nameof(TradeAssistant), "Clears the selected store so /ta commands fall back to the nearest store again. Usage: /ta store clear", ChatAuthorizationLevel.User)]
+        public static async Task StoreClear(User user)
+        {
+            user.Config().SelectedStoreName = null;
+            StorageManager.Obj.MarkDirty(TradeAssistantData.Obj);
+            user.TempServerMessage(Localizer.DoStr("Store selection cleared. The nearest store will be used again."));
         }
     }
 }
