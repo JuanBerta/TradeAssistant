@@ -1,4 +1,4 @@
-﻿# English (base) translations for Trade Assistant.
+# English (base) translations for Trade Assistant.
 # msgid is the source string; empty msgstr means "use the source string".
 # Translations are loaded by Eco from the mod's Locales folder at runtime.
 
@@ -55,4 +55,17 @@ msgstr ""
 
 
 msgid "- Optional: use /ta recipeqty set <item> <quantity> to configure how many of each product you produce per batch. Quantities are tracked separately for craft and cook recipes (/ta recipeqty craft <item> <qty> and /ta recipeqty cook <item> <qty> force a type, /ta recipeqty status lists everything). /ta setupbuy and /ta autobuylimits use these quantities to size your buy limits."
+msgid "None of the required ingredients match the given tags. Run /ta setupbuy to see suggested tags."
+msgstr ""
+
+msgid "Matching ingredients for tag(s):"
+msgstr ""
+
+msgid "No required ingredients matched: {0}"
+msgstr ""
+
+msgid "Suggested ingredient tags (shared by multiple recipes, with items not yet covered by store orders):"
+msgstr ""
+
+msgid "Run /ta setupbuy <tag...> to only add ingredients matching those tags."
 msgstr ""

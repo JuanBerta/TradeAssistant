@@ -101,8 +101,13 @@ namespace TradeAssistant
             user.TempServerMessage(sb);
         }
 
-        [ChatSubCommand(nameof(TradeAssistant), "Add buy orders for all the ingredients you need to make the products you're selling", ChatAuthorizationLevel.User)]
-        public static async Task SetupBuy(User user)
+        [ChatSubCommand(nameof(TradeAssistant), "Add buy orders for all the ingredients you need to make the products you're selling. Add one or more ingredient tag names to only add ingredients matching those tags.", ChatAuthorizationLevel.User)]
+        public static async Task SetupBuy(User user) => await SetupBuyCore(user, null);
+
+        [ChatSubCommand(nameof(TradeAssistant), "Add buy orders for all the ingredients you need to make the products you're selling. Add one or more ingredient tag names to only add ingredients matching those tags.", ChatAuthorizationLevel.User)]
+        public static async Task SetupBuy(User user, string tags) => await SetupBuyCore(user, tags);
+
+        private static async Task SetupBuyCore(User user, string? tags)
         {
             var calc = await TradeAssistantCalculator.TryInitialize(user);
             if (calc == null)
@@ -135,13 +140,70 @@ namespace TradeAssistant
 
             var existingBuyOrderTypeIds = calc.Store.StoreData.BuyOffers.SelectMany(o => o.OfferedItemTypeIDs()).ToHashSet();
             var existingOrderTypeIds = existingBuyOrderTypeIds.Union(sellOfferTypeIds).ToHashSet();
+            var tagList = (tags ?? "").Split(' ', StringSplitOptions.RemoveEmptyEntries).ToList();
+
+            if (tagList.Count > 0)
+            {
+                var tagInstances = calc.CollectTagInstances();
+                var matched = new HashSet<int>();
+                var matchedOutput = new List<(string TagName, List<Item> MatchedItems)>();
+                var unmatched = new List<string>();
+                foreach (var tagName in tagList)
+                {
+                    if (!tagInstances.TryGetValue(tagName, out var tag))
+                    {
+                        unmatched.Add(tagName);
+                        continue;
+                    }
+                    var tagItems = items
+                        .Where(id => tag.TaggedItems().Any(tagged => tagged.TypeID == id))
+                        .Select(Item.Get)
+                        .Where(i => i != null)
+                        .ToList();
+                    if (tagItems.Count == 0)
+                    {
+                        unmatched.Add(tagName);
+                        continue;
+                    }
+                    matchedOutput.Add((tagName, tagItems));
+                    foreach (var item in tagItems)
+                        matched.Add(item.TypeID);
+                }
+
+                if (matched.Count == 0)
+                {
+                    user.TempServerMessage(Localizer.DoStr("None of the required ingredients match the given tags. Run /ta setupbuy to see suggested tags."));
+                    return;
+                }
+
+                sb.AppendLineLoc($"Matching ingredients for tag(s):");
+                foreach (var (tagName, tagItems) in matchedOutput)
+                    sb.AppendLineLoc($"- {Text.Info(tagName)}: {string.Join(", ", tagItems.Select(i => i.UILink()))}");
+                if (unmatched.Count > 0)
+                    sb.AppendLineLoc($"No required ingredients matched: {string.Join(", ", unmatched.Select(Text.Info))}");
+                items = matched;
+            }
+            else
+            {
+                // No tag filter: keep the existing full behaviour, but suggest useful ingredient tags first.
+                var suggestions = calc.SuggestIngredientTags(items, existingOrderTypeIds);
+                if (suggestions.Count > 0)
+                {
+                    sb.AppendLineLoc($"Suggested ingredient tags (shared by multiple recipes, with items not yet covered by store orders):");
+                    foreach (var suggestion in suggestions.Take(10))
+                        sb.AppendLineLoc($"- {Text.Info(suggestion.TagName)}: used by {Text.StyledNum(suggestion.RecipeCount)} recipe(s), {Text.StyledNum(suggestion.ItemCount)} item(s)");
+                    sb.AppendLineLoc($"Run /ta setupbuy <tag...> to only add ingredients matching those tags.");
+                }
+            }
+
             var duplicateOrderCount = items.RemoveWhere(existingOrderTypeIds.Contains);
             if (items.Count == 0)
             {
                 if (duplicateOrderCount > 0)
-                    user.TempServerMessage(Localizer.DoStr($"No new buy orders were added because all required ingredients already exist as store orders."));
+                    sb.AppendLineLoc($"No new buy orders were added because all matching required ingredients already exist as store orders.");
                 else
-                    user.TempServerMessage(Localizer.DoStr($"All buy orders to make the current sell order products are already listed in this shop."));
+                    sb.AppendLineLoc($"All buy orders to make the current sell order products are already listed in this shop.");
+                user.TempServerMessage(sb.ToStringLoc());
                 return;
             }
 
@@ -152,7 +214,8 @@ namespace TradeAssistant
                 offer.Limit = 1;
                 offer.Price = 0;
             }
-            user.TempServerMessage(Localizer.DoStr($"{Text.Info(Text.Num(items.Count))} buy orders were added, please open the shop and set the Price and Limit for each of them."));
+            sb.AppendLineLoc($"{Text.Info(Text.Num(items.Count))} buy orders were added, please open the shop and set the Price and Limit for each of them.");
+            user.TempServerMessage(sb.ToStringLoc());
         }
 
 
