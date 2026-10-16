@@ -53,3 +53,6 @@ msgstr ""
 msgid "BUY OFFERS:"
 msgstr ""
 
+
+msgid "- Optional: use /ta recipeqty set <item> <quantity> to configure how many of each product you produce per batch. Quantities are tracked separately for craft and cook recipes (/ta recipeqty craft <item> <qty> and /ta recipeqty cook <item> <qty> force a type, /ta recipeqty status lists everything). /ta setupbuy and /ta autobuylimits use these quantities to size your buy limits."
+msgstr ""
