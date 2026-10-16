@@ -44,6 +44,7 @@ namespace TradeAssistant
         [Serialized] public float CompetitiveCeilingPercent { get; set; } = 0f;
         [Serialized] public ThreadSafeList<string> CompetitiveCategories { get; set; } = new();
         [Serialized] public string? SelectedStoreName { get; set; } = null;
+        [Serialized] public ThreadSafeDictionary<int, RecipeQuantitySetting> RecipeQuantities { get; set; } = new();
 
         public UserConfigUI ToUI()
         {

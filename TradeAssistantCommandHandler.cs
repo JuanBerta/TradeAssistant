@@ -48,6 +48,7 @@ namespace TradeAssistant
             sb.AppendLine(Localizer.DoStr("- Optional: use /ta exchange status to compare your store prices with the current market (exchange) average/min/max across all player stores, and /ta exchange price <avg|min> [sell|buy] to sync your orders to that market baseline."));
             sb.AppendLine(Localizer.DoStr("- Optional: use /ta competitive on [floorPercent] to follow the lowest competing market price while keeping prices inside your profit range (default floor: 85% of the normal price). Restrict it to categories with /ta competitive category add <name>, review with /ta competitive status and disable with /ta competitive off."));
             sb.AppendLine(Localizer.DoStr("- Optional: use /ta exportconfig to get your whole configuration as a copy/paste payload and /ta importconfig <payload> to restore it on another server. If you own several stores, manage which one /ta commands apply to with /ta store list, /ta store select <name> and /ta store clear."));
+            sb.AppendLine(Localizer.DoStr("- Optional: use /ta recipeqty set <item> <quantity> to configure how many of each product you produce per batch. Quantities are tracked separately for craft and cook recipes (/ta recipeqty craft <item> <qty> and /ta recipeqty cook <item> <qty> force a type, /ta recipeqty status lists everything). /ta setupbuy and /ta autobuylimits use these quantities to size your buy limits."));
 
             user.TempServerMessage(sb);
         }
@@ -469,6 +470,102 @@ namespace TradeAssistant
 
             user.TempServerMessage(Localizer.Do($"Updated buy limits for {updated} of {buyOffers.Count} buy offers ({noDemand} had no crafting demand, multiplier {Text.StyledNum(multiplier)}).{Environment.NewLine}{sb.ToStringLoc()}"));
 
+        }
+
+        [ChatSubCommand(nameof(TradeAssistant), "Configure per-recipe production quantities, split between craft and cook recipes. Usage: /ta recipeqty <set|craft|cook|clear|status> [itemName] [quantity]", ChatAuthorizationLevel.User)]
+        public static async Task RecipeQty(User user, string action, string? rest = null)
+        {
+            var calc = await TradeAssistantCalculator.TryInitialize(user);
+            if (calc == null) return;
+
+            var parts = (rest ?? "").Split(' ', StringSplitOptions.RemoveEmptyEntries);
+            var config = calc.Config;
+
+            if (action.Equals("status", StringComparison.OrdinalIgnoreCase))
+            {
+                if (config.RecipeQuantities.Count == 0)
+                {
+                    user.TempServerMessage(Localizer.DoStr("No per-recipe production quantities are configured yet. Use /ta recipeqty set <item> <quantity> to add one."));
+                    return;
+                }
+
+                var sb = new StringBuilder();
+                sb.AppendLineLoc($"Configured recipe production quantities:");
+                foreach (var pair in config.RecipeQuantities.OrderBy(p => Item.Get(p.Key)?.DisplayName ?? p.Key.ToString(), StringComparer.OrdinalIgnoreCase))
+                {
+                    var item = Item.Get(pair.Key);
+                    if (item == null) continue;
+                    var type = calc.FindRecipeTypeForItem(pair.Key);
+                    var active = type == RecipeType.Cook ? pair.Value.CookQty : pair.Value.CraftQty;
+                    sb.AppendLineLoc($"- {item.UILink()}: craft {Text.StyledNum(pair.Value.CraftQty)}, cook {Text.StyledNum(pair.Value.CookQty)} ({(type == null ? "no craftable recipe" : type == RecipeType.Cook ? "cook" : "craft")} active: {Text.StyledNum(active)})");
+                }
+                user.TempServerMessage(sb.ToStringLoc());
+                return;
+            }
+
+            if (parts.Length == 0)
+            {
+                user.TempServerMessage(Localizer.DoStr("Usage: /ta recipeqty <set|craft|cook|clear|status> [itemName] [quantity]"));
+                return;
+            }
+
+            if (action.Equals("clear", StringComparison.OrdinalIgnoreCase))
+            {
+                var itemName = string.Join(" ", parts);
+                var item = CommandsUtil.ClosestMatchingEntity(user, itemName, Item.AllItemsExceptHidden, x => x.GetType().Name, x => x.DisplayName);
+                if (item == null) return;
+                if (config.RecipeQuantities.Remove(item.TypeID))
+                {
+                    StorageManager.Obj.MarkDirty(TradeAssistantData.Obj);
+                    user.TempServerMessage(Localizer.Do($"Removed recipe quantity configuration for {item.UILink()}."));
+                }
+                else
+                    user.TempServerMessage(Localizer.Do($"No recipe quantity configuration found for {item.UILink()}."));
+                return;
+            }
+
+            var isSet = action.Equals("set", StringComparison.OrdinalIgnoreCase);
+            var isCraft = action.Equals("craft", StringComparison.OrdinalIgnoreCase);
+            var isCook = action.Equals("cook", StringComparison.OrdinalIgnoreCase);
+            if (!isSet && !isCraft && !isCook)
+            {
+                user.TempServerMessage(Localizer.DoStr("Usage: /ta recipeqty <set|craft|cook|clear|status> [itemName] [quantity]"));
+                return;
+            }
+
+            if (parts.Length < 2 || !int.TryParse(parts[^1], System.Globalization.NumberStyles.Integer, System.Globalization.CultureInfo.InvariantCulture, out var qty) || qty < 0)
+            {
+                user.TempServerMessage(Localizer.DoStr("Please provide an item name followed by a non-negative integer quantity (e.g. /ta recipeqty set Campfire Stew 3)."));
+                return;
+            }
+
+            var name = string.Join(" ", parts.Take(parts.Length - 1));
+            var target = CommandsUtil.ClosestMatchingEntity(user, name, Item.AllItemsExceptHidden, x => x.GetType().Name, x => x.DisplayName);
+            if (target == null) return;
+
+            var forcedType = isCraft ? (RecipeType?)RecipeType.Craft : isCook ? (RecipeType?)RecipeType.Cook : null;
+            if (isSet && forcedType == null)
+            {
+                forcedType = calc.FindRecipeTypeForItem(target.TypeID);
+                if (forcedType == null)
+                {
+                    user.TempServerMessage(Localizer.Do($"There is no craftable recipe producing {target.UILink()} on this property's crafting tables. Use /ta recipeqty craft <item> <quantity> or /ta recipeqty cook <item> <quantity> to force a type."));
+                    return;
+                }
+            }
+
+            if (!config.RecipeQuantities.TryGetValue(target.TypeID, out var setting))
+            {
+                setting = new RecipeQuantitySetting();
+                config.RecipeQuantities[target.TypeID] = setting;
+            }
+            if (forcedType == RecipeType.Cook)
+                setting.CookQty = qty;
+            else
+                setting.CraftQty = qty;
+
+            StorageManager.Obj.MarkDirty(TradeAssistantData.Obj);
+            user.TempServerMessage(Localizer.Do($"Recipe quantity for {target.UILink()} set to {Text.StyledNum(qty)} per batch ({(forcedType == RecipeType.Cook ? "cook" : "craft")} recipes). /ta setupbuy and /ta autobuylimits will use it to size buy limits."));
         }
 
 
