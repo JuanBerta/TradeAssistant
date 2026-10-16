@@ -70,5 +70,41 @@ namespace TradeAssistant
         {
             return Localizer.Do($"{Text.StyledNum(stats.AveragePrice)} avg / {Text.StyledNum(stats.MinPrice)} min / {Text.StyledNum(stats.MaxPrice)} max ({Text.StyledNum(stats.OfferCount)} offer(s))");
         }
+
+        /// <summary>Returns every observed price per item (one entry per offer), sorted ascending.
+        /// Used to compute the median sell price for the automatic buy price feature.</summary>
+        public static Dictionary<int, List<float>> ComputeMarketPriceLists(bool sellOffers)
+        {
+            var result = new Dictionary<int, List<float>>();
+            foreach (var store in WorldObjectUtil.AllObjsWithComponent<StoreComponent>())
+            {
+                var offers = sellOffers ? store.StoreData.SellOffers : store.StoreData.BuyOffers;
+                foreach (var offer in offers)
+                {
+                    var price = offer.Price;
+                    foreach (var typeID in offer.OfferedItemTypeIDs())
+                    {
+                        if (!result.TryGetValue(typeID, out var list))
+                        {
+                            list = new List<float>();
+                            result[typeID] = list;
+                        }
+                        list.Add(price);
+                    }
+                }
+            }
+            foreach (var kvp in result)
+                kvp.Value.Sort();
+            return result;
+        }
+
+        /// <summary>Median of a sorted price list, or 0 when the list is empty.</summary>
+        public static float MedianPrice(List<float> prices)
+        {
+            if (prices == null || prices.Count == 0)
+                return 0f;
+            var mid = prices.Count / 2;
+            return prices.Count % 2 == 1 ? prices[mid] : (prices[mid - 1] + prices[mid]) / 2f;
+        }
     }
 }

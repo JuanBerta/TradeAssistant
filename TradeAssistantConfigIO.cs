@@ -37,6 +37,9 @@ namespace TradeAssistant
         public Dictionary<string, float> CategoryDiscounts { get; set; } = new();
         public Dictionary<string, RecipeQuantitySetting> RecipeQuantities { get; set; } = new();
         public string? SelectedStoreName { get; set; }
+        public bool BuyPriceAutoEnabled { get; set; } = false;
+        public string BuyPriceAutoMode { get; set; } = "highest";
+        public float BuyPriceAutoPercent { get; set; } = 80f;
     }
 
     public static class TradeAssistantConfigIO
@@ -84,7 +87,10 @@ namespace TradeAssistant
                 PartnerPlayers = ResolveUsers(snapshot.PartnerPlayers, warnings),
                 CategoryDiscounts = ToDiscountDictionary(snapshot.CategoryDiscounts),
                 RecipeQuantities = ResolveRecipeQuantities(snapshot.RecipeQuantities, warnings),
-                SelectedStoreName = snapshot.SelectedStoreName
+                SelectedStoreName = snapshot.SelectedStoreName,
+                BuyPriceAutoEnabled = snapshot.BuyPriceAutoEnabled,
+                BuyPriceAutoMode = NormalizeMode(snapshot.BuyPriceAutoMode),
+                BuyPriceAutoPercent = snapshot.BuyPriceAutoPercent
             };
             return (config, warnings);
         }
@@ -112,8 +118,14 @@ namespace TradeAssistant
                 .ToDictionary(kv => kv.Key, kv => kv.Value),
             RecipeQuantities = (config.RecipeQuantities ?? new ThreadSafeDictionary<int, RecipeQuantitySetting>())
                 .ToDictionary(kv => ItemNameOf(kv.Key), kv => new RecipeQuantitySetting { CraftQty = kv.Value.CraftQty, CookQty = kv.Value.CookQty }),
-            SelectedStoreName = config.SelectedStoreName
+            SelectedStoreName = config.SelectedStoreName,
+            BuyPriceAutoEnabled = config.BuyPriceAutoEnabled,
+            BuyPriceAutoMode = NormalizeMode(config.BuyPriceAutoMode),
+            BuyPriceAutoPercent = config.BuyPriceAutoPercent
         };
+
+        private static string NormalizeMode(string? mode) =>
+            mode != null && mode.Equals("median", StringComparison.OrdinalIgnoreCase) ? "median" : "highest";
 
         private static string DecodePayload(string payload)
         {

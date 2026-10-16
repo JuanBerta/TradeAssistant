@@ -70,5 +70,44 @@ msgstr ""
 msgid "Run /ta setupbuy <tag...> to only add ingredients matching those tags."
 msgstr ""
 
-msgid "{0} buy orders were added with buy limits automatically set from recipe quantities (price left at 0 for you to set)."
+msgid "{0} buy orders were added with buy limits automatically set from recipe quantities (price left at 0 for you to set). Run /ta autobuyprice on to price them automatically."
+msgstr ""
+
+msgid "- {0}: buy price set to {1} ({2} sell price {3} x {4}%)"
+msgstr ""
+
+msgid "Automatic buy price is enabled ({0} sell price x {1}%): {2} priced, {3} item(s) without market data left at 0."
+msgstr ""
+
+msgid "Automatic buy price enabled: /ta setupbuy will price new buy orders from the market sell price of each ingredient."
+msgstr ""
+
+msgid "Automatic buy price disabled: /ta setupbuy will leave new buy prices at 0."
+msgstr ""
+
+msgid "Usage: /ta autobuyprice mode <highest|median>"
+msgstr ""
+
+msgid "Buy price reference mode set to {0} sell price."
+msgstr ""
+
+msgid "Usage: /ta autobuyprice percent <n> (percentage of the market sell price, e.g. 80)"
+msgstr ""
+
+msgid "Buy price percentage set to {0}%."
+msgstr ""
+
+msgid "Automatic buy price: {0}"
+msgstr ""
+
+msgid "enabled ({0} sell price x {1}%)"
+msgstr ""
+
+msgid "disabled (use /ta autobuyprice on to enable)"
+msgstr ""
+
+msgid "Usage: /ta autobuyprice <on|off|mode <highest|median>|percent <n>|status>"
+msgstr ""
+
+msgid "- Optional: run /ta autobuyprice on to automatically price new buy orders added by /ta setupbuy from the market sell price of each ingredient (highest or median, default highest) multiplied by a configurable percentage (default 80%). Adjust with /ta autobuyprice mode <highest|median> and /ta autobuyprice percent <n>, review with /ta autobuyprice status and disable with /ta autobuyprice off."
 msgstr ""

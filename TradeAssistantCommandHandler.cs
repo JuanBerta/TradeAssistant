@@ -49,6 +49,7 @@ namespace TradeAssistant
             sb.AppendLine(Localizer.DoStr("- Optional: use /ta competitive on [floorPercent] to follow the lowest competing market price while keeping prices inside your profit range (default floor: 85% of the normal price). Restrict it to categories with /ta competitive category add <name>, review with /ta competitive status and disable with /ta competitive off."));
             sb.AppendLine(Localizer.DoStr("- Optional: use /ta exportconfig to get your whole configuration as a copy/paste payload and /ta importconfig <payload> to restore it on another server. If you own several stores, manage which one /ta commands apply to with /ta store list, /ta store select <name> and /ta store clear."));
             sb.AppendLine(Localizer.DoStr("- Optional: use /ta recipeqty set <item> <quantity> to configure how many of each product you produce per batch. Quantities are tracked separately for craft and cook recipes (/ta recipeqty craft <item> <qty> and /ta recipeqty cook <item> <qty> force a type, /ta recipeqty status lists everything). /ta setupbuy and /ta autobuylimits use these quantities to size your buy limits."));
+            sb.AppendLine(Localizer.DoStr("- Optional: run /ta autobuyprice on to automatically price new buy orders added by /ta setupbuy from the market sell price of each ingredient (highest or median, default highest) multiplied by a configurable percentage (default 80%). Adjust with /ta autobuyprice mode <highest|median> and /ta autobuyprice percent <n>, review with /ta autobuyprice status and disable with /ta autobuyprice off."));
 
             user.TempServerMessage(sb);
         }
@@ -210,13 +211,43 @@ namespace TradeAssistant
 
             var demand = calc.CraftingDemandPerItem();
             calc.Store.CreateCategoryWithOffers(user.Player, items.ToList(), true);
+
+            var autoPriceEnabled = calc.Config.BuyPriceAutoEnabled;
+            var autoPriceMode = calc.Config.BuyPriceAutoMode ?? "highest";
+            var useMedian = autoPriceMode.Equals("median", StringComparison.OrdinalIgnoreCase);
+            var marketStats = autoPriceEnabled ? TradeAssistantMarket.ComputeMarket(sellOffers: true) : null;
+            var medianPrices = autoPriceEnabled && useMedian ? TradeAssistantMarket.ComputeMarketPriceLists(sellOffers: true) : null;
+            var autoPriced = 0;
+            var autoPriceMissing = 0;
+
             foreach (var offer in calc.Store.StoreData.BuyOffers.Where(o => items.Any(o.MatchesTypeID)))
             {
                 var demandSum = offer.OfferedItemTypeIDs().Sum(id => demand.GetValueOrDefault(id, 0f));
                 offer.Limit = demandSum > 0f ? (int)Math.Ceiling(demandSum) : 1;
-                offer.Price = 0;
+                var typeId = offer.OfferedItemTypeIDs().FirstOrDefault();
+                var item = Item.Get(typeId);
+                if (autoPriceEnabled && marketStats != null && marketStats.TryGetValue(typeId, out var stats) && stats.OfferCount > 0)
+                {
+                    var reference = useMedian && medianPrices != null && medianPrices.TryGetValue(typeId, out var list)
+                        ? TradeAssistantMarket.MedianPrice(list)
+                        : stats.MaxPrice;
+                    var price = reference * calc.Config.BuyPriceAutoPercent / 100f;
+                    calc.SetBuyPrice(typeId, price);
+                    autoPriced++;
+                    sb.AppendLineLoc($"- {item.UILink()}: buy price set to {Text.StyledNum(price)} ({(useMedian ? "median" : "highest")} sell price {Text.StyledNum(reference)} x {Text.StyledNum(calc.Config.BuyPriceAutoPercent)}%)");
+                }
+                else
+                {
+                    offer.Price = 0;
+                    if (autoPriceEnabled)
+                        autoPriceMissing++;
+                }
             }
-            sb.AppendLineLoc($"{Text.Info(Text.Num(items.Count))} buy orders were added with buy limits automatically set from recipe quantities (price left at 0 for you to set).");
+
+            if (autoPriceEnabled)
+                sb.AppendLineLoc($"Automatic buy price is enabled ({autoPriceMode} sell price x {Text.StyledNum(calc.Config.BuyPriceAutoPercent)}%): {Text.StyledNum(autoPriced)} priced, {Text.StyledNum(autoPriceMissing)} item(s) without market data left at 0.");
+            else
+                sb.AppendLineLoc($"{Text.Info(Text.Num(items.Count))} buy orders were added with buy limits automatically set from recipe quantities (price left at 0 for you to set). Run /ta autobuyprice on to price them automatically.");
             user.TempServerMessage(sb.ToStringLoc());
         }
 
@@ -535,6 +566,61 @@ namespace TradeAssistant
 
             user.TempServerMessage(Localizer.Do($"Updated buy limits for {updated} of {buyOffers.Count} buy offers ({noDemand} had no crafting demand, multiplier {Text.StyledNum(multiplier)}).{Environment.NewLine}{sb.ToStringLoc()}"));
 
+        }
+
+        [ChatSubCommand(nameof(TradeAssistant), "Controls automatic buy prices for /ta setupbuy: prices new ingredient buy orders from the highest or median market sell price of that ingredient multiplied by a configurable percentage. Usage: /ta autobuyprice <on|off|mode <highest|median>|percent <n>|status>", ChatAuthorizationLevel.User)]
+        public static async Task AutoBuyPrice(User user, string action, string? value = null)
+        {
+            var calc = await TradeAssistantCalculator.TryInitialize(user);
+            if (calc == null) return;
+
+            var config = calc.Config;
+            if (action.Equals("on", StringComparison.OrdinalIgnoreCase))
+            {
+                config.BuyPriceAutoEnabled = true;
+                StorageManager.Obj.MarkDirty(TradeAssistantData.Obj);
+                user.TempServerMessage(Localizer.DoStr("Automatic buy price enabled: /ta setupbuy will price new buy orders from the market sell price of each ingredient."));
+            }
+            else if (action.Equals("off", StringComparison.OrdinalIgnoreCase))
+            {
+                config.BuyPriceAutoEnabled = false;
+                StorageManager.Obj.MarkDirty(TradeAssistantData.Obj);
+                user.TempServerMessage(Localizer.DoStr("Automatic buy price disabled: /ta setupbuy will leave new buy prices at 0."));
+            }
+            else if (action.Equals("mode", StringComparison.OrdinalIgnoreCase))
+            {
+                if (value == null || (!value.Equals("highest", StringComparison.OrdinalIgnoreCase) && !value.Equals("median", StringComparison.OrdinalIgnoreCase)))
+                {
+                    user.TempServerMessage(Localizer.DoStr("Usage: /ta autobuyprice mode <highest|median>"));
+                    return;
+                }
+                config.BuyPriceAutoMode = value.ToLowerInvariant();
+                StorageManager.Obj.MarkDirty(TradeAssistantData.Obj);
+                user.TempServerMessage(Localizer.DoStr($"Buy price reference mode set to {Text.Info(config.BuyPriceAutoMode)} sell price."));
+            }
+            else if (action.Equals("percent", StringComparison.OrdinalIgnoreCase))
+            {
+                if (value == null || !float.TryParse(value, System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out var percent) || percent <= 0f)
+                {
+                    user.TempServerMessage(Localizer.DoStr("Usage: /ta autobuyprice percent <n> (percentage of the market sell price, e.g. 80)"));
+                    return;
+                }
+                config.BuyPriceAutoPercent = percent;
+                StorageManager.Obj.MarkDirty(TradeAssistantData.Obj);
+                user.TempServerMessage(Localizer.DoStr($"Buy price percentage set to {Text.StyledNum(percent)}%."));
+            }
+            else if (action.Equals("status", StringComparison.OrdinalIgnoreCase))
+            {
+                var mode = config.BuyPriceAutoMode ?? "highest";
+                var state = config.BuyPriceAutoEnabled
+                    ? Localizer.Do($"enabled ({mode} sell price x {Text.StyledNum(config.BuyPriceAutoPercent)}%)")
+                    : Localizer.DoStr("disabled (use /ta autobuyprice on to enable)");
+                user.TempServerMessage(Localizer.Do($"Automatic buy price: {state}"));
+            }
+            else
+            {
+                user.TempServerMessage(Localizer.DoStr("Usage: /ta autobuyprice <on|off|mode <highest|median>|percent <n>|status>"));
+            }
         }
 
         [ChatSubCommand(nameof(TradeAssistant), "Configure per-recipe production quantities, split between craft and cook recipes. Usage: /ta recipeqty <set|craft|cook|clear|status> [itemName] [quantity]", ChatAuthorizationLevel.User)]
