@@ -35,6 +35,7 @@ namespace TradeAssistant
         public List<string> FrozenSellPrices { get; set; } = new();
         public List<string> PartnerPlayers { get; set; } = new();
         public Dictionary<string, float> CategoryDiscounts { get; set; } = new();
+        public Dictionary<string, RecipeQuantitySetting> RecipeQuantities { get; set; } = new();
         public string? SelectedStoreName { get; set; }
     }
 
@@ -82,6 +83,7 @@ namespace TradeAssistant
                 FrozenSellPrices = ResolveItems(snapshot.FrozenSellPrices, warnings),
                 PartnerPlayers = ResolveUsers(snapshot.PartnerPlayers, warnings),
                 CategoryDiscounts = ToDiscountDictionary(snapshot.CategoryDiscounts),
+                RecipeQuantities = ResolveRecipeQuantities(snapshot.RecipeQuantities, warnings),
                 SelectedStoreName = snapshot.SelectedStoreName
             };
             return (config, warnings);
@@ -108,6 +110,8 @@ namespace TradeAssistant
             PartnerPlayers = (config.PartnerPlayers ?? new ThreadSafeList<int>()).Select(UserNameOf).ToList(),
             CategoryDiscounts = (config.CategoryDiscounts ?? new ThreadSafeDictionary<string, float>())
                 .ToDictionary(kv => kv.Key, kv => kv.Value),
+            RecipeQuantities = (config.RecipeQuantities ?? new ThreadSafeDictionary<int, RecipeQuantitySetting>())
+                .ToDictionary(kv => ItemNameOf(kv.Key), kv => new RecipeQuantitySetting { CraftQty = kv.Value.CraftQty, CookQty = kv.Value.CookQty }),
             SelectedStoreName = config.SelectedStoreName
         };
 
@@ -163,6 +167,26 @@ namespace TradeAssistant
                     continue;
                 }
                 result.Add(item.TypeID);
+            }
+            return result;
+        }
+
+        private static ThreadSafeDictionary<int, RecipeQuantitySetting> ResolveRecipeQuantities(Dictionary<string, RecipeQuantitySetting>? map, List<string> warnings)
+        {
+            var result = new ThreadSafeDictionary<int, RecipeQuantitySetting>();
+            if (map == null) return result;
+            foreach (var pair in map)
+            {
+                if (string.IsNullOrWhiteSpace(pair.Key)) continue;
+                var item = Item.AllItemsExceptHidden.FirstOrDefault(i =>
+                    string.Equals(i.DisplayName, pair.Key, StringComparison.OrdinalIgnoreCase) ||
+                    string.Equals(i.Name, pair.Key, StringComparison.OrdinalIgnoreCase));
+                if (item == null)
+                {
+                    warnings.Add($"Could not resolve item '{pair.Key}' for recipe quantities on this server; skipped.");
+                    continue;
+                }
+                result[item.TypeID] = new RecipeQuantitySetting { CraftQty = pair.Value.CraftQty, CookQty = pair.Value.CookQty };
             }
             return result;
         }

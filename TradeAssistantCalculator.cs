@@ -122,6 +122,22 @@ namespace TradeAssistant
             return demand;
         }
 
+        /// <summary>Finds the recipe type (craft/cook) for the first craftable recipe that produces
+        /// the given item. Returns null when no craftable recipe produces the item.</summary>
+        public RecipeType? FindRecipeTypeForItem(int itemTypeId)
+        {
+            foreach (var family in CraftingTables
+                .SelectMany(w => w.Recipes)
+                .Where(recipe => Users.Any(user => recipe.RequiredSkills.All(s => s.IsMet(user)))))
+            {
+                var recipe = family.Recipes.Skip(family.CraftableDefault ? 0 : 1)
+                    .FirstOrDefault(r => r.Products.Any(p => p.Item.TypeID == itemTypeId));
+                if (recipe != null)
+                    return RecipeTypeResolver.GetRecipeType(recipe);
+            }
+            return null;
+        }
+
         public Dictionary<int, List<int>> ProductToRequiredItemsLookup()
         {
             return CraftingTables
