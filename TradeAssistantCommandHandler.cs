@@ -208,13 +208,15 @@ namespace TradeAssistant
             }
 
 
+            var demand = calc.CraftingDemandPerItem();
             calc.Store.CreateCategoryWithOffers(user.Player, items.ToList(), true);
             foreach (var offer in calc.Store.StoreData.BuyOffers.Where(o => items.Any(o.MatchesTypeID)))
             {
-                offer.Limit = 1;
+                var demandSum = offer.OfferedItemTypeIDs().Sum(id => demand.GetValueOrDefault(id, 0f));
+                offer.Limit = demandSum > 0f ? (int)Math.Ceiling(demandSum) : 1;
                 offer.Price = 0;
             }
-            sb.AppendLineLoc($"{Text.Info(Text.Num(items.Count))} buy orders were added, please open the shop and set the Price and Limit for each of them.");
+            sb.AppendLineLoc($"{Text.Info(Text.Num(items.Count))} buy orders were added with buy limits automatically set from recipe quantities (price left at 0 for you to set).");
             user.TempServerMessage(sb.ToStringLoc());
         }
 

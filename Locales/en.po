@@ -69,3 +69,6 @@ msgstr ""
 
 msgid "Run /ta setupbuy <tag...> to only add ingredients matching those tags."
 msgstr ""
+
+msgid "{0} buy orders were added with buy limits automatically set from recipe quantities (price left at 0 for you to set)."
+msgstr ""

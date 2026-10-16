@@ -96,26 +96,38 @@ namespace TradeAssistant
         public Dictionary<int, float> CraftingDemandPerItem()
         {
             var demand = new Dictionary<int, float>();
-            var ingredients = CraftingTables
+            var recipes = CraftingTables
                 .SelectMany(w => w.Recipes.Where(recipe => Users.Any(user => recipe.RequiredSkills.All(s => s.IsMet(user)))))
                 .SelectMany(r => r.Recipes.Skip(r.CraftableDefault ? 0 : 1))
-                .SelectMany(r => r.Ingredients)
                 .ToList();
 
-            foreach (var ingredient in ingredients)
+            foreach (var recipe in recipes)
             {
-                var quantity = ingredient.Quantity.GetBaseValue;
-                if (ingredient.IsSpecificItem && ingredient.Item != null)
+                // Scale the recipe's ingredient usage by the configured per-recipe production quantity.
+                // Unconfigured recipes keep the historical one-batch behaviour.
+                var batchMultiplier = 1f;
+                var mainProduct = RecipeTypeResolver.MainProductOf(recipe, Config);
+                if (mainProduct != null && Config.RecipeQuantities.TryGetValue(mainProduct.TypeID, out var setting))
                 {
-                    var id = ingredient.Item.TypeID;
-                    demand[id] = demand.GetValueOrDefault(id) + quantity;
+                    var type = RecipeTypeResolver.GetRecipeType(recipe);
+                    batchMultiplier = type == RecipeType.Cook ? setting.CookQty : setting.CraftQty;
                 }
-                else if (ingredient.Tag != null)
+
+                foreach (var ingredient in recipe.Ingredients)
                 {
-                    foreach (var item in ingredient.Tag.TaggedItems())
+                    var quantity = ingredient.Quantity.GetBaseValue * batchMultiplier;
+                    if (ingredient.IsSpecificItem && ingredient.Item != null)
                     {
-                        var id = item.TypeID;
+                        var id = ingredient.Item.TypeID;
                         demand[id] = demand.GetValueOrDefault(id) + quantity;
+                    }
+                    else if (ingredient.Tag != null)
+                    {
+                        foreach (var item in ingredient.Tag.TaggedItems())
+                        {
+                            var id = item.TypeID;
+                            demand[id] = demand.GetValueOrDefault(id) + quantity;
+                        }
                     }
                 }
             }
