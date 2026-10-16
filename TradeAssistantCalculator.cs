@@ -122,6 +122,58 @@ namespace TradeAssistant
             return demand;
         }
 
+        /// <summary>Collects the Tag instance for every named tag used by craftable recipes.</summary>
+        public Dictionary<string, Tag> CollectTagInstances()
+        {
+            var tags = new Dictionary<string, Tag>(StringComparer.OrdinalIgnoreCase);
+            foreach (var recipe in CraftingTables
+                .SelectMany(w => w.Recipes)
+                .Where(r => Users.Any(user => r.RequiredSkills.All(s => s.IsMet(user))))
+                .SelectMany(r => r.Recipes.Skip(r.CraftableDefault ? 0 : 1)))
+            {
+                foreach (var ingredient in recipe.Ingredients.Where(i => i.Tag != null))
+                {
+                    if (!tags.ContainsKey(ingredient.Tag.Name))
+                        tags[ingredient.Tag.Name] = ingredient.Tag;
+                }
+            }
+            return tags;
+        }
+
+        /// <summary>Aggregates ingredient tags from craftable recipes that are shared by multiple recipes
+        /// and still have candidate items not yet covered by store orders, ordered by shared recipe count.</summary>
+        public List<TagSuggestion> SuggestIngredientTags(HashSet<int> candidateItemIds, HashSet<int> coveredTypeIds)
+        {
+            var usage = new Dictionary<string, (Tag Tag, HashSet<int> Recipes, HashSet<int> Items)>(StringComparer.OrdinalIgnoreCase);
+            var recipes = CraftingTables
+                .SelectMany(w => w.Recipes)
+                .Where(r => Users.Any(user => r.RequiredSkills.All(s => s.IsMet(user))))
+                .SelectMany(r => r.Recipes.Skip(r.CraftableDefault ? 0 : 1))
+                .ToList();
+
+            for (var i = 0; i < recipes.Count; i++)
+            {
+                foreach (var ingredient in recipes[i].Ingredients.Where(ing => ing.Tag != null))
+                {
+                    if (!usage.TryGetValue(ingredient.Tag.Name, out var entry))
+                    {
+                        entry = (ingredient.Tag, new HashSet<int>(), new HashSet<int>());
+                        usage[ingredient.Tag.Name] = entry;
+                    }
+                    entry.Recipes.Add(i);
+                    foreach (var item in ingredient.Tag.TaggedItems().Where(item => candidateItemIds.Contains(item.TypeID)))
+                        entry.Items.Add(item.TypeID);
+                }
+            }
+
+            return usage.Values
+                .Where(e => e.Recipes.Count > 0 && e.Items.Count > 0 && e.Items.Any(i => !coveredTypeIds.Contains(i)))
+                .Select(e => new TagSuggestion(e.Tag.Name, e.Recipes.Count, e.Items.Count))
+                .OrderByDescending(s => s.RecipeCount)
+                .ThenBy(s => s.TagName, StringComparer.OrdinalIgnoreCase)
+                .ToList();
+        }
+
         public Dictionary<int, List<int>> ProductToRequiredItemsLookup()
         {
             return CraftingTables
@@ -679,4 +731,7 @@ namespace TradeAssistant
             return false;
         }
     }
+
+    /// <summary>Describes an ingredient tag suggested for filtering /ta setupbuy.</summary>
+    public record TagSuggestion(string TagName, int RecipeCount, int ItemCount);
 }

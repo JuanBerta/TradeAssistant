@@ -53,3 +53,18 @@ msgstr ""
 msgid "BUY OFFERS:"
 msgstr ""
 
+
+msgid "None of the required ingredients match the given tags. Run /ta setupbuy to see suggested tags."
+msgstr ""
+
+msgid "Matching ingredients for tag(s):"
+msgstr ""
+
+msgid "No required ingredients matched: {0}"
+msgstr ""
+
+msgid "Suggested ingredient tags (shared by multiple recipes, with items not yet covered by store orders):"
+msgstr ""
+
+msgid "Run /ta setupbuy <tag...> to only add ingredients matching those tags."
+msgstr ""
